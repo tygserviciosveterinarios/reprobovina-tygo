@@ -1,0 +1,1677 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ReproBovina T&amp;G</title>
+
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ReproBovina" />
+  <meta name="theme-color" content="#1C2B22" />
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Inter', -apple-system, sans-serif; }
+    #error-box {
+      display: none; position: fixed; inset: 0; background: #fff; z-index: 9999;
+      padding: 24px; font-family: -apple-system, sans-serif; overflow: auto;
+    }
+    #error-box h2 { color: #A6491F; }
+    #error-box pre { background: #f3eedd; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.3.1/jsx-dev-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react",
+      "xlsx": "https://esm.sh/xlsx@0.18.5",
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+    }
+  }
+  </script>
+
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <div id="error-box">
+    <h2>Ocurrió un error</h2>
+    <p>Sacale una captura a esto y mandásela a Claude para corregirlo:</p>
+    <pre id="error-text"></pre>
+  </div>
+
+  <script>
+    window.addEventListener("error", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      document.getElementById("error-text").textContent =
+        (e.error && e.error.stack) || e.message || String(e);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      var r = e.reason;
+      document.getElementById("error-text").textContent = (r && (r.stack || r.message)) || String(r);
+    });
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState, useEffect, useRef } from "react";
+    import { createRoot } from "react-dom/client";
+    import { Users, Plus, X, Trash2, Pencil, Wifi, WifiOff, ListChecks, Stethoscope, Syringe, ClipboardCheck, ChevronDown, ChevronUp, AlertTriangle, Download } from "lucide-react";
+    import * as XLSX from "xlsx";
+    import { initializeApp } from "firebase/app";
+    import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from "firebase/firestore";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDeBLhH4lIASyLxlMg_oSwM_EZX7wzOg94",
+      authDomain: "reprobovina-tyg.firebaseapp.com",
+      projectId: "reprobovina-tyg",
+      storageBucket: "reprobovina-tyg.firebasestorage.app",
+      messagingSenderId: "162502425864",
+      appId: "1:162502425864:web:49fecac926675a731c00bd",
+    };
+    const fbApp = initializeApp(firebaseConfig);
+    const db = getFirestore(fbApp);
+
+    const DB_NAME = "reprobovina_local";
+    const DB_VERSION = 6;
+    const COLECCIONES = ["clientes", "preservicios", "gestaciones", "iatfs", "andrologicos", "toros_base"];
+
+    function abrirDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const dbase = req.result;
+          COLECCIONES.forEach((nombre) => {
+            if (!dbase.objectStoreNames.contains(nombre)) {
+              dbase.createObjectStore(nombre, { keyPath: "id" });
+            }
+          });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbGetAll(nombreColeccion) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readonly");
+        const req = tx.objectStore(nombreColeccion).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbPut(nombreColeccion, registro) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).put(registro);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function idbDelete(nombreColeccion, id) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function getColeccion(nombreColeccion) { return idbGetAll(nombreColeccion); }
+    async function guardarEnColeccion(nombreColeccion, registro) {
+      const conFecha = { ...registro, updatedAt: Date.now() };
+      await idbPut(nombreColeccion, conFecha);
+      if (navigator.onLine) {
+        try { await setDoc(doc(db, nombreColeccion, conFecha.id), conFecha); } catch (e) {}
+      }
+      return conFecha;
+    }
+    async function borrarDeColeccion(nombreColeccion, id) {
+      await idbDelete(nombreColeccion, id);
+      if (navigator.onLine) {
+        try { await deleteDoc(doc(db, nombreColeccion, id)); } catch (e) {}
+      }
+    }
+    async function sincronizar(nombreColeccion) {
+      if (!navigator.onLine) return { ok: false };
+      try {
+        const locales = await idbGetAll(nombreColeccion);
+        const localesPorId = Object.fromEntries(locales.map((r) => [r.id, r]));
+        const snap = await getDocs(collection(db, nombreColeccion));
+        const remotos = snap.docs.map((d) => d.data());
+        const remotosPorId = Object.fromEntries(remotos.map((r) => [r.id, r]));
+        const todosLosIds = new Set([...Object.keys(localesPorId), ...Object.keys(remotosPorId)]);
+        for (const id of todosLosIds) {
+          const loc = localesPorId[id];
+          const rem = remotosPorId[id];
+          if (loc && !rem) await setDoc(doc(db, nombreColeccion, id), loc);
+          else if (rem && !loc) await idbPut(nombreColeccion, rem);
+          else if (loc && rem) {
+            if ((loc.updatedAt || 0) > (rem.updatedAt || 0)) await setDoc(doc(db, nombreColeccion, id), loc);
+            else if ((rem.updatedAt || 0) > (loc.updatedAt || 0)) await idbPut(nombreColeccion, rem);
+          }
+        }
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, motivo: e.message };
+      }
+    }
+
+    const T = {
+      paper: "#DCD3B8", ink: "#1C2B22", inkSoft: "#5A6B5E", card: "#F3EEDD",
+      line: "#C9BE9C", rust: "#A6491F", gold: "#8A6D1E", goldSoft: "#E9DCB0",
+      teal: "#1F6B6B", tealSoft: "#CFE3E1",
+    };
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+    let _audioCtx = null;
+    let _audioUnlocked = false;
+    function _desbloquearAudio(ctx) {
+      if (_audioUnlocked) return;
+      try {
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer; src.connect(ctx.destination); src.start(0);
+      } catch (e) {}
+      _audioUnlocked = true;
+    }
+    function _tocarTono(ctx, kind) {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      if (kind === "negativo") {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(260, now + 0.16);
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.start(now); osc.stop(now + 0.19);
+      } else {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(720, now);
+        osc.frequency.exponentialRampToValueAtTime(980, now + 0.1);
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+        osc.start(now); osc.stop(now + 0.15);
+      }
+    }
+    /* kind: "positivo" (preñada/apta) o "negativo" (vacía/descarte) */
+    function playBeep(kind) {
+      try {
+        if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = _audioCtx;
+        _desbloquearAudio(ctx);
+        if (ctx.state === "suspended" || ctx.state === "interrupted") {
+          ctx.resume().then(() => _tocarTono(ctx, kind)).catch(() => {});
+        } else {
+          _tocarTono(ctx, kind);
+        }
+      } catch (e) {}
+    }
+
+    function EstadoConexion({ estado }) {
+      const config = {
+        online: { icon: Wifi, texto: "En línea · sincronizado", color: T.teal, bg: T.tealSoft },
+        offline: { icon: WifiOff, texto: "Sin conexión · guardado en el dispositivo", color: T.rust, bg: "#E7C9B7" },
+        sincronizando: { icon: Wifi, texto: "Sincronizando...", color: T.gold, bg: T.goldSoft },
+      }[estado] || {};
+      const Icon = config.icon;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", background: config.bg, color: config.color, fontSize: 14, fontWeight: 600 }}>
+          {Icon && <Icon size={16} />} {config.texto}
+        </div>
+      );
+    }
+
+    function useCollection(nombre) {
+      const [lista, setLista] = useState([]);
+      const [estadoSync, setEstadoSync] = useState(navigator.onLine ? "sincronizando" : "offline");
+      const recargar = () => getColeccion(nombre).then(setLista);
+      useEffect(() => {
+        recargar();
+        const sync = async () => {
+          if (!navigator.onLine) { setEstadoSync("offline"); return; }
+          setEstadoSync("sincronizando");
+          await sincronizar(nombre);
+          await recargar();
+          setEstadoSync("online");
+        };
+        sync();
+        const onOnline = () => sync();
+        const onOffline = () => setEstadoSync("offline");
+        window.addEventListener("online", onOnline);
+        window.addEventListener("offline", onOffline);
+        return () => {
+          window.removeEventListener("online", onOnline);
+          window.removeEventListener("offline", onOffline);
+        };
+      }, [nombre]);
+      const guardar = async (registro) => {
+        const conId = registro.id ? registro : { ...registro, id: uid() };
+        await guardarEnColeccion(nombre, conId);
+        await recargar();
+      };
+      const borrar = async (id) => { await borrarDeColeccion(nombre, id); await recargar(); };
+      return { lista, guardar, borrar, estadoSync };
+    }
+
+    function pct(parte, total) {
+      if (!total) return 0;
+      return Math.round((parte / total) * 1000) / 10;
+    }
+    function nuevoEstablecimiento() { return { id: uid(), nombre: "", ubicacion: "" }; }
+
+    /* Busca un valor en una fila de Excel probando distintos nombres posibles de columna */
+    function extractField(row, aliases) {
+      for (const key of Object.keys(row)) {
+        const k = key.toString().trim().toLowerCase();
+        if (aliases.some((a) => k === a || k.includes(a))) return row[key];
+      }
+      return "";
+    }
+
+    /* Lee un archivo Excel/CSV de toros (identidad simple o examen completo, reconoce las columnas solo) */
+    async function parseExcelToros(file) {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      return rows.map((row) => {
+        const estadoTexto = String(extractField(row, ["estado"]) || "").trim().toLowerCase();
+        const motivoTexto = String(extractField(row, ["motivo"]) || "").trim();
+        const observTexto = String(extractField(row, ["observ"]) || "").trim();
+        let estado = "apto";
+        if (estadoTexto.includes("descarte")) estado = "descarte";
+        else if (estadoTexto.includes("tratamiento")) estado = "tratamiento";
+        // Si no había una columna "Estado" clara, buscamos la palabra "descarte" en motivo u observaciones
+        if (estado === "apto" && (motivoTexto.toLowerCase().includes("descarte") || observTexto.toLowerCase().includes("descarte"))) {
+          estado = "descarte";
+        }
+        return {
+          tubo: String(extractField(row, ["tubo"]) || "").trim(),
+          rp: String(extractField(row, ["rp"]) || "").trim(),
+          electronica: String(extractField(row, ["electronica", "electrónica", "eid", "vid", "caravana"]) || "").trim(),
+          raza: String(extractField(row, ["raza"]) || "").trim(),
+          origen: String(extractField(row, ["origen"]) || "").trim(),
+          rodeo: String(extractField(row, ["rodeo"]) || "").trim(),
+          ce: String(extractField(row, ["ce", "circunferencia"]) || "").trim(),
+          tono: String(extractField(row, ["tono"]) || "").trim(),
+          cc: String(extractField(row, ["cc", "condicion", "condición"]) || "").trim(),
+          estado,
+          motivoDescarte: motivoTexto,
+          observaciones: observTexto,
+        };
+      }).filter((t) => t.rp || t.electronica);
+    }
+
+    /* Descarga un libro de Excel ya armado (evita el bug de XLSX.writeFile en algunos navegadores) */
+    function descargarExcel(wb, nombreArchivo) {
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = nombreArchivo;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function exportarExcelPreservicio(inf, cliente) {
+      const st = statsPreservicio(inf);
+      const rev = st.revisadas, apt = st.aptas;
+      const filas = [
+        ["INFORME DE PRESERVICIO"],
+        ["Cliente", cliente.nombre], ["Establecimiento", inf.establecimiento], ["Fecha", inf.fecha],
+        [],
+        ["Revisadas", rev], ["Aptas", apt], ["% Aptas", `${pct(apt, rev)}%`], ["% Descarte", `${pct(rev - apt, rev)}%`],
+        [],
+        ["Motivos de descarte"],
+        ["Pelvimetría", st.descPelvimetria || 0], ["GDR", st.descGdr || 0], ["Tamaño", st.descTamano || 0], ["Otras", st.descOtras || 0],
+        [], ["Observaciones", inf.observaciones || ""],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(filas);
+      ws["!cols"] = [{ wch: 20 }, { wch: 26 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Preservicio");
+      descargarExcel(wb, `Preservicio_${cliente.nombre}_${inf.fecha}.xlsx`);
+    }
+
+    function exportarExcelGestacion(inf, cliente, iatfs = []) {
+      const filas = [
+        ["INFORME DE GESTACIÓN"],
+        ["Cliente", cliente.nombre], ["Establecimiento", inf.establecimiento], ["Fecha", inf.fecha], ["Método", inf.metodo],
+        [],
+        ["Rodeo", "Categoría", "Cantidad", "Preñadas", "% Preñez", "Ingreso toros", "Salida toros", "Días servicio", "Fecha IATF", "Edad preñez (d)", "Lote IATF vinculado", "% Preñez a IATF", "Observaciones"],
+      ];
+      let totCant = 0, totPren = 0;
+      (inf.rodeos || []).forEach((r, i) => {
+        const s = statsRodeo(r);
+        totCant += s.cantidad; totPren += s.prenadas;
+        const vinculado = getLoteIatfVinculado(iatfs, r.iatfInformeId, r.iatfLoteId);
+        const inseminadas = vinculado ? (parseFloat(vinculado.lote.cantidad) || 0) : 0;
+        filas.push([
+          i + 1, r.categoria || "", s.cantidad, s.prenadas, `${pct(s.prenadas, s.cantidad)}%`,
+          r.fechaIngresoToros || "", r.fechaSalidaToros || "", diffDays(r.fechaIngresoToros, inf.fecha) ?? "",
+          r.fechaIATF || "", diffDays(r.fechaIATF, inf.fecha) ?? "",
+          vinculado ? `${vinculado.lote.nombre || "Lote"} (${inseminadas})` : "",
+          vinculado ? `${pct(s.prenadas, inseminadas)}%` : "",
+          r.observaciones || "",
+        ]);
+      });
+      filas.push(["TOTAL", "", totCant, totPren, `${pct(totPren, totCant)}%`, "", "", "", "", "", "", "", ""]);
+      filas.push([], ["Conclusión", inf.conclusion || ""]);
+      const ws = XLSX.utils.aoa_to_sheet(filas);
+      ws["!cols"] = [{ wch: 10 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 14 }, { wch: 30 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Gestacion");
+      descargarExcel(wb, `Gestacion_${cliente.nombre}_${inf.fecha}.xlsx`);
+    }
+
+    function exportarExcelIatf(inf, cliente) {
+      const filas = [
+        ["INFORME DE IATF"],
+        ["Cliente", cliente.nombre], ["Establecimiento", inf.establecimiento], ["Fecha", inf.fecha],
+        [],
+        ["Lote", "Toros", "Colocación", "Retiro", "Hora fin retiro", "IATF", "Hora inicio IATF", "Horas transcurridas", "Cantidad", "Perd. dispositivo", "% Pérdida", "No respondieron", "% Respuesta"],
+      ];
+      (inf.protocolos || []).forEach((p, i) => {
+        const cant = parseFloat(p.cantidad) || 0;
+        const perd = parseFloat(p.perdidasDispositivo) || 0;
+        const noResp = parseFloat(p.noRespondieron) || 0;
+        const toros = (p.toros || []).filter((t) => t.nombre).map((t) => `${t.nombre}${(p.toros.length > 1 && t.cantidad) ? ` (${t.cantidad})` : ""}`).join(", ");
+        const horas = horasEntreRetiroYIatf(p);
+        filas.push([
+          p.nombre || `Lote ${i + 1}`, toros, p.fechaColocacion || "", p.fechaRetiro || "", p.horaRetiroFin || "",
+          p.fechaIATF || "", p.horaIATFInicio || "", horas !== null ? `${horas} h` : "",
+          cant, perd, `${pct(perd, cant)}%`, noResp, `${pct(cant - noResp, cant)}%`,
+        ]);
+      });
+      filas.push([], ["Observaciones generales", inf.observacionesGen || ""]);
+      const ws = XLSX.utils.aoa_to_sheet(filas);
+      ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 12 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "IATF");
+      descargarExcel(wb, `IATF_${cliente.nombre}_${inf.fecha}.xlsx`);
+    }
+
+    function exportarExcelAndrologico(inf, cliente) {
+      const filas = [
+        ["EXAMEN ANDROLÓGICO"],
+        ["Cliente", cliente.nombre], ["Establecimiento", inf.establecimiento], ["Fecha", inf.fecha],
+        [],
+        ["Tubo", "RP", "Electrónica", "Raza", "Origen", "C.E.", "Tono", "C.C.", "Estado", "Motivo descarte", "Observaciones"],
+      ];
+      (inf.toros || []).forEach((t) => {
+        const est = ESTADOS_TORO.find((e) => e.v === t.estado);
+        filas.push([t.tubo || "", t.rp || "", t.electronica || "", t.raza || "", t.origen || "", t.ce || "", t.tono || "", t.cc || "", est ? est.label : "", t.motivoDescarte || "", t.observaciones || ""]);
+      });
+      const aptos = (inf.toros || []).filter((t) => t.estado === "apto").length;
+      filas.push([], ["Resumen", `${aptos}/${(inf.toros || []).length} aptos`]);
+      const ws = XLSX.utils.aoa_to_sheet(filas);
+      ws["!cols"] = [{ wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 26 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Andrologico");
+      descargarExcel(wb, `Andrologico_${cliente.nombre}_${inf.fecha}.xlsx`);
+    }
+
+    function ClientesView({ clientes, guardar, borrar, estadoSync, onSeleccionar }) {
+      const [showForm, setShowForm] = useState(false);
+      const [editingId, setEditingId] = useState(null);
+      const [nombre, setNombre] = useState("");
+      const [establecimientos, setEstablecimientos] = useState([nuevoEstablecimiento()]);
+      const [busqueda, setBusqueda] = useState("");
+
+      const abrirNuevo = () => { setEditingId(null); setNombre(""); setEstablecimientos([nuevoEstablecimiento()]); setShowForm(true); };
+      const abrirEditar = (c) => {
+        setEditingId(c.id); setNombre(c.nombre);
+        setEstablecimientos(c.establecimientos && c.establecimientos.length ? c.establecimientos : [nuevoEstablecimiento()]);
+        setShowForm(true);
+      };
+      const confirmarGuardar = () => {
+        if (!nombre.trim()) return;
+        const est = establecimientos.filter((e) => e.nombre.trim());
+        guardar({ id: editingId || undefined, nombre: nombre.trim(), establecimientos: est, createdAt: Date.now() });
+        setShowForm(false);
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este cliente?")) borrar(id); };
+      const filtrados = clientes.filter((c) => c.nombre.toLowerCase().includes(busqueda.toLowerCase()));
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ display: "flex", justifyContent: "center", padding: "20px 16px 4px" }}>
+            <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 24, color: T.ink }}>T&amp;G Servicios Veterinarios</div>
+          </div>
+          <div style={{ padding: "15px 19px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 21, color: T.ink }}>Clientes</div>
+              <div style={{ fontSize: 14.5, color: T.inkSoft }}>{clientes.length} registrados</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "13px 19px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={20} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." style={{ width: "100%", padding: "15px 17px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 17, marginBottom: 14, background: "#fff" }} />
+            {showForm && (
+              <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+                <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Nombre del cliente</label>
+                <input autoFocus value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Agrobari S.A." style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Establecimientos</label>
+                {establecimientos.map((e, i) => (
+                  <div key={e.id} style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <input value={e.nombre} onChange={(ev) => setEstablecimientos(establecimientos.map((x) => x.id === e.id ? { ...x, nombre: ev.target.value } : x))}
+                      placeholder="Nombre del campo" style={{ flex: 1, padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    <input value={e.ubicacion} onChange={(ev) => setEstablecimientos(establecimientos.map((x) => x.id === e.id ? { ...x, ubicacion: ev.target.value } : x))}
+                      placeholder="Ubicación (opcional)" style={{ flex: 1, padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    {establecimientos.length > 1 && (
+                      <button onClick={() => setEstablecimientos(establecimientos.filter((x) => x.id !== e.id))} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={19} /></button>
+                    )}
+                  </div>
+                ))}
+                <button onClick={() => setEstablecimientos([...establecimientos, nuevoEstablecimiento()])} style={{ background: "none", border: "none", color: T.teal, fontSize: 15, fontWeight: 700, cursor: "pointer", padding: "8px 0", display: "flex", alignItems: "center", gap: 4 }}>
+                  <Plus size={17} /> Agregar establecimiento
+                </button>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={confirmarGuardar} style={{ flex: 1, background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "10px", fontWeight: 700, cursor: "pointer" }}>Guardar</button>
+                  <button onClick={() => setShowForm(false)} style={{ background: "none", border: `1.5px solid ${T.line}`, borderRadius: 8, padding: "13px 17px", cursor: "pointer" }}><X size={19} /></button>
+                </div>
+              </div>
+            )}
+            {filtrados.length === 0 && !showForm && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Users size={38} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay clientes cargados. Tocá "Nuevo" para agregar el primero.</div>
+              </div>
+            )}
+            {filtrados.map((c) => (
+              <div key={c.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }} onClick={() => onSeleccionar(c)}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>{c.nombre}</div>
+                    {(c.establecimientos || []).length > 0 && (
+                      <div style={{ fontSize: 15, color: T.inkSoft, marginTop: 3 }}>
+                        {c.establecimientos.map((e) => e.ubicacion ? `${e.nombre} (${e.ubicacion})` : e.nombre).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }} onClick={(ev) => ev.stopPropagation()}>
+                    <button onClick={() => abrirEditar(c)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={19} /></button>
+                    <button onClick={() => eliminar(c.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={20} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function statsPreservicio(f) {
+      if (f.modoCarga === "rapida") {
+        const animales = f.animales || [];
+        const conteo = { "Pelvimetría": 0, "GDR": 0, "Tamaño": 0, "Otras": 0 };
+        animales.forEach((a) => { if (a.resultado === "Descarte" && a.motivo) conteo[a.motivo] = (conteo[a.motivo] || 0) + 1; });
+        return {
+          revisadas: animales.length, aptas: animales.filter((a) => a.resultado === "Apta").length,
+          descPelvimetria: conteo["Pelvimetría"], descGdr: conteo["GDR"], descTamano: conteo["Tamaño"], descOtras: conteo["Otras"],
+        };
+      }
+      return {
+        revisadas: parseFloat(f.revisadas) || 0, aptas: parseFloat(f.aptas) || 0,
+        descPelvimetria: parseFloat(f.descPelvimetria) || 0, descGdr: parseFloat(f.descGdr) || 0,
+        descTamano: parseFloat(f.descTamano) || 0, descOtras: parseFloat(f.descOtras) || 0,
+      };
+    }
+
+    function PreservicioQuickEntry({ form, onChange }) {
+      const [caravana, setCaravana] = useState("");
+      const [pendienteDescarte, setPendienteDescarte] = useState(false);
+      const animales = form.animales || [];
+      const agregar = (resultado, motivo) => {
+        const nuevo = { id: uid(), caravana: caravana.trim(), resultado, motivo: motivo || "" };
+        onChange({ animales: [...animales, nuevo] });
+        playBeep(resultado === "Apta" ? "positivo" : "negativo");
+        setCaravana(""); setPendienteDescarte(false);
+      };
+      const borrar = (id) => onChange({ animales: animales.filter((a) => a.id !== id) });
+      const aptas = animales.filter((a) => a.resultado === "Apta").length;
+      const descartes = animales.length - aptas;
+      return (
+        <div>
+          <input value={caravana} onChange={(e) => setCaravana(e.target.value)} placeholder="Caravana (opcional)"
+            style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, marginBottom: 8, background: "#fff" }} />
+          {!pendienteDescarte ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <button onClick={() => agregar("Apta")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Apta</button>
+              <button onClick={() => setPendienteDescarte(true)} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.rust, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Descarte</button>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 14.5, color: T.inkSoft, marginBottom: 6 }}>Motivo del descarte:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                {["Pelvimetría", "GDR", "Tamaño", "Otras"].map((m) => (
+                  <button key={m} onClick={() => agregar("Descarte", m)} style={{ padding: "12px", borderRadius: 10, border: `1.5px solid ${T.rust}`, background: "#E7C9B7", color: T.rust, fontWeight: 700, fontSize: 16.5, cursor: "pointer" }}>{m}</button>
+                ))}
+              </div>
+              <button onClick={() => setPendienteDescarte(false)} style={{ background: "none", border: "none", color: T.teal, fontSize: 14.5, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 15, fontWeight: 700 }}>
+            <span style={{ color: T.gold }}>{aptas} aptas</span>
+            <span style={{ color: T.rust }}>{descartes} descarte</span>
+            <span style={{ color: T.inkSoft }}>{animales.length} total</span>
+          </div>
+          {animales.length > 0 && (
+            <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              {[...animales].reverse().map((a) => (
+                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 13px", borderBottom: `1px solid ${T.line}`, fontSize: 15 }}>
+                  <span>{a.caravana || "s/n"}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: a.resultado === "Apta" ? T.gold : T.rust, fontWeight: 700 }}>{a.resultado}{a.motivo ? ` (${a.motivo})` : ""}</span>
+                    <button onClick={() => borrar(a.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={16} /></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function PreservicioView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista"); // lista | form
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        nombre: "", numero: "",
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        modoCarga: "totales",
+        revisadas: "", aptas: "", animales: [],
+        descPelvimetria: "", descGdr: "", descTamano: "", descOtras: "",
+        observaciones: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const s = statsPreservicio(form);
+      const revisadas = s.revisadas, aptas = s.aptas;
+      const descarte = Math.max(0, revisadas - aptas);
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Nombre del informe (opcional)</label>
+                  <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Ej: Preservicio Saravia 2026" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>N° de informe</label>
+                  <input value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} placeholder="Opcional" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+              </div>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+              )}
+
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <button onClick={() => setForm({ ...form, modoCarga: "totales" })} style={{
+                  flex: 1, padding: "7px", borderRadius: 8, fontSize: 14.5, fontWeight: 700, cursor: "pointer",
+                  border: `1.5px solid ${form.modoCarga !== "rapida" ? T.teal : T.line}`, background: form.modoCarga !== "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                }}>Totales</button>
+                <button onClick={() => setForm({ ...form, modoCarga: "rapida" })} style={{
+                  flex: 1, padding: "7px", borderRadius: 8, fontSize: 14.5, fontWeight: 700, cursor: "pointer",
+                  border: `1.5px solid ${form.modoCarga === "rapida" ? T.teal : T.line}`, background: form.modoCarga === "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                }}>Carga rápida (por toque)</button>
+              </div>
+
+              {form.modoCarga === "rapida" ? (
+                <PreservicioQuickEntry form={form} onChange={(patch) => setForm({ ...form, ...patch })} />
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Revisadas</label>
+                    <input type="number" value={form.revisadas} onChange={(e) => setForm({ ...form, revisadas: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Aptas</label>
+                    <input type="number" value={form.aptas} onChange={(e) => setForm({ ...form, aptas: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                  </div>
+                </div>
+              )}
+
+              {revisadas > 0 && (
+                <div style={{ background: T.goldSoft, borderRadius: 10, padding: "13px 15px", marginBottom: 12, display: "flex", justifyContent: "space-around", textAlign: "center" }}>
+                  <div><div style={{ fontSize: 13, color: T.gold, fontWeight: 700 }}>APTAS</div><div style={{ fontWeight: 700, fontSize: 20 }}>{pct(aptas, revisadas)}%</div></div>
+                  <div><div style={{ fontSize: 13, color: T.rust, fontWeight: 700 }}>DESCARTE</div><div style={{ fontWeight: 700, fontSize: 20 }}>{pct(descarte, revisadas)}%</div></div>
+                </div>
+              )}
+
+              {form.modoCarga !== "rapida" && (
+                <React.Fragment>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Motivos de descarte (opcional)</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: "6px 0 12px" }}>
+                    <input type="number" placeholder="Pelvimetría" value={form.descPelvimetria} onChange={(e) => setForm({ ...form, descPelvimetria: e.target.value })} style={{ padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    <input type="number" placeholder="GDR" value={form.descGdr} onChange={(e) => setForm({ ...form, descGdr: e.target.value })} style={{ padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    <input type="number" placeholder="Tamaño" value={form.descTamano} onChange={(e) => setForm({ ...form, descTamano: e.target.value })} style={{ padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    <input type="number" placeholder="Otras" value={form.descOtras} onChange={(e) => setForm({ ...form, descOtras: e.target.value })} style={{ padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                  </div>
+                </React.Fragment>
+              )}
+
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Observaciones</label>
+              <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff", minHeight: 70 }} />
+
+              <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "16px", fontSize: 17, fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "19px 19px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 21, color: T.ink }}>Preservicio</div>
+              <div style={{ fontSize: 14.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "13px 19px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={20} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <ListChecks size={38} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de preservicio para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
+              const stInf = statsPreservicio(inf);
+              const rev = stInf.revisadas, apt = stInf.aptas;
+              return (
+                <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 18, color: T.ink }}>{inf.nombre || inf.establecimiento}</div>
+                      <div style={{ fontSize: 14.5, color: T.inkSoft }}>{inf.numero ? `N° ${inf.numero} · ` : ""}{inf.establecimiento} · {inf.fecha}</div>
+                      {rev > 0 && <div style={{ fontSize: 15, color: T.gold, fontWeight: 700, marginTop: 4 }}>{apt}/{rev} aptas ({pct(apt, rev)}%)</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => exportarExcelPreservicio(inf, cliente)} style={{ background: "none", border: "none", color: T.gold, cursor: "pointer" }}><Download size={19} /></button>
+                      <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={19} /></button>
+                      <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={20} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function diffDays(isoDesde, isoHasta) {
+      if (!isoDesde || !isoHasta) return null;
+      const a = new Date(isoDesde + "T00:00:00");
+      const b = new Date(isoHasta + "T00:00:00");
+      if (isNaN(a.getTime()) || isNaN(b.getTime())) return null;
+      return Math.round((b - a) / 86400000);
+    }
+    function nuevoRodeo() {
+      return {
+        id: uid(), categoria: "", modoCarga: "totales", cantidad: "", prenadas: "", animales: [], observaciones: "",
+        fechaIngresoToros: "", fechaSalidaToros: "", fechaIATF: "", iatfInformeId: "", iatfLoteId: "",
+      };
+    }
+    function statsRodeo(r) {
+      if (r.modoCarga === "rapida") {
+        const animales = r.animales || [];
+        return { cantidad: animales.length, prenadas: animales.filter((a) => a.resultado === "Preñada").length };
+      }
+      return { cantidad: parseFloat(r.cantidad) || 0, prenadas: parseFloat(r.prenadas) || 0 };
+    }
+
+    function RodeoQuickEntry({ rodeo, onChange }) {
+      const [caravana, setCaravana] = useState("");
+      const animales = rodeo.animales || [];
+      const marcar = (resultado) => {
+        const nuevo = { id: uid(), caravana: caravana.trim(), resultado };
+        onChange({ animales: [...animales, nuevo] });
+        playBeep(resultado === "Preñada" ? "positivo" : "negativo");
+        setCaravana("");
+      };
+      const borrarAnimal = (id) => onChange({ animales: animales.filter((a) => a.id !== id) });
+      const pren = animales.filter((a) => a.resultado === "Preñada").length;
+      const vac = animales.length - pren;
+      return (
+        <div>
+          <input value={caravana} onChange={(e) => setCaravana(e.target.value)} placeholder="Caravana (opcional)"
+            style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, marginBottom: 8, background: "#fff" }} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <button onClick={() => marcar("Preñada")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Preñada</button>
+            <button onClick={() => marcar("Vacía")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.rust, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Vacía</button>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 15, fontWeight: 700 }}>
+            <span style={{ color: T.gold }}>{pren} preñadas</span>
+            <span style={{ color: T.rust }}>{vac} vacías</span>
+            <span style={{ color: T.inkSoft }}>{animales.length} total</span>
+          </div>
+          {animales.length > 0 && (
+            <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              {[...animales].reverse().map((a) => (
+                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 13px", borderBottom: `1px solid ${T.line}`, fontSize: 15 }}>
+                  <span>{a.caravana || "s/n"}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: a.resultado === "Preñada" ? T.gold : T.rust, fontWeight: 700 }}>{a.resultado}</span>
+                    <button onClick={() => borrarAnimal(a.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={16} /></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function getLoteIatfVinculado(iatfs, iatfInformeId, iatfLoteId) {
+      if (!iatfInformeId || !iatfLoteId) return null;
+      const inf = iatfs.find((i) => i.id === iatfInformeId);
+      if (!inf) return null;
+      const lote = (inf.protocolos || []).find((p) => p.id === iatfLoteId);
+      if (!lote) return null;
+      return { inf, lote };
+    }
+
+    function GestacionView({ cliente, informes, guardar, borrar, estadoSync, iatfs = [] }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        nombre: "", numero: "",
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        metodo: "Tacto rectal",
+        rodeos: [nuevoRodeo()],
+        conclusion: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarRodeo = (id, patch) => setForm({ ...form, rodeos: form.rodeos.map((r) => r.id === id ? { ...r, ...patch } : r) });
+      const agregarRodeo = () => setForm({ ...form, rodeos: [...form.rodeos, nuevoRodeo()] });
+      const quitarRodeo = (id) => setForm({ ...form, rodeos: form.rodeos.filter((r) => r.id !== id) });
+
+      const totalesInforme = (inf) => (inf.rodeos || []).reduce((acc, r) => {
+        const s = statsRodeo(r);
+        acc.cantidad += s.cantidad;
+        acc.prenadas += s.prenadas;
+        return acc;
+      }, { cantidad: 0, prenadas: 0 });
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Nombre del informe (opcional)</label>
+                  <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Ej: Gestación Saravia 2026" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>N° de informe</label>
+                  <input value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} placeholder="Opcional" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+              </div>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+              )}
+
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Método</label>
+              <select value={form.metodo} onChange={(e) => setForm({ ...form, metodo: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }}>
+                <option>Tacto rectal</option>
+                <option>Ecografía</option>
+              </select>
+            </div>
+
+            {form.rodeos.map((r, i) => {
+              const s = statsRodeo(r);
+              return (
+                <div key={r.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: T.ink }}>Rodeo {i + 1}</div>
+                    {form.rodeos.length > 1 && <button onClick={() => quitarRodeo(r.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={19} /></button>}
+                  </div>
+                  <input placeholder="Categoría (ej: Vaquillonas)" value={r.categoria} onChange={(e) => actualizarRodeo(r.id, { categoria: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, marginBottom: 8, background: "#fff" }} />
+
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    <button onClick={() => actualizarRodeo(r.id, { modoCarga: "totales" })} style={{
+                      flex: 1, padding: "7px", borderRadius: 8, fontSize: 14.5, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${r.modoCarga !== "rapida" ? T.teal : T.line}`, background: r.modoCarga !== "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                    }}>Totales</button>
+                    <button onClick={() => actualizarRodeo(r.id, { modoCarga: "rapida" })} style={{
+                      flex: 1, padding: "7px", borderRadius: 8, fontSize: 14.5, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${r.modoCarga === "rapida" ? T.teal : T.line}`, background: r.modoCarga === "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                    }}>Carga rápida (por toque)</button>
+                  </div>
+
+                  {r.modoCarga === "rapida" ? (
+                    <RodeoQuickEntry rodeo={r} onChange={(patch) => actualizarRodeo(r.id, patch)} />
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 13, color: T.inkSoft }}>Cantidad</label>
+                        <input type="number" value={r.cantidad} onChange={(e) => actualizarRodeo(r.id, { cantidad: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 13, color: T.inkSoft }}>Preñadas</label>
+                        <input type="number" value={r.prenadas} onChange={(e) => actualizarRodeo(r.id, { prenadas: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                      </div>
+                    </div>
+                  )}
+                  {s.cantidad > 0 && (
+                    <div style={{ fontSize: 15, fontWeight: 700, color: T.gold, marginTop: 8, marginBottom: 10 }}>{pct(s.prenadas, s.cantidad)}% preñez ({s.prenadas} de {s.cantidad})</div>
+                  )}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Ingreso de toros</label>
+                      <input type="date" value={r.fechaIngresoToros} onChange={(e) => actualizarRodeo(r.id, { fechaIngresoToros: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Salida de toros</label>
+                      <input type="date" value={r.fechaSalidaToros} onChange={(e) => actualizarRodeo(r.id, { fechaSalidaToros: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                  </div>
+
+                  <label style={{ fontSize: 13, color: T.inkSoft }}>Vincular con lote de IATF (opcional)</label>
+                  <select value={r.iatfInformeId && r.iatfLoteId ? `${r.iatfInformeId}|${r.iatfLoteId}` : ""} onChange={(e) => {
+                    const [infId, loteId] = e.target.value ? e.target.value.split("|") : ["", ""];
+                    const vinculado = getLoteIatfVinculado(iatfs, infId, loteId);
+                    actualizarRodeo(r.id, {
+                      iatfInformeId: infId, iatfLoteId: loteId,
+                      fechaIATF: vinculado ? vinculado.inf.fecha : r.fechaIATF,
+                    });
+                  }} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, marginBottom: 8, background: "#fff" }}>
+                    <option value="">Sin vincular</option>
+                    {iatfs.filter((inf) => inf.clienteId === cliente.id).map((inf) => (
+                      (inf.protocolos || []).map((p) => (
+                        <option key={p.id} value={`${inf.id}|${p.id}`}>
+                          {(inf.nombre || inf.establecimiento)} · {inf.fecha} · {p.nombre || "Lote"}
+                        </option>
+                      ))
+                    ))}
+                  </select>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Fecha de IATF</label>
+                      <input type="date" value={r.fechaIATF} onChange={(e) => actualizarRodeo(r.id, { fechaIATF: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                      {diffDays(r.fechaIngresoToros, form.fecha) !== null && (
+                        <div style={{ fontSize: 13, color: T.inkSoft }}>Días de servicio: <b style={{ color: T.ink }}>{diffDays(r.fechaIngresoToros, form.fecha)}</b></div>
+                      )}
+                      {diffDays(r.fechaIATF, form.fecha) !== null && (
+                        <div style={{ fontSize: 13, color: T.inkSoft }}>Edad preñez (IATF): <b style={{ color: T.ink }}>{diffDays(r.fechaIATF, form.fecha)} días</b></div>
+                      )}
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const vinculado = getLoteIatfVinculado(iatfs, r.iatfInformeId, r.iatfLoteId);
+                    if (!vinculado) return null;
+                    const inseminadas = parseFloat(vinculado.lote.cantidad) || 0;
+                    return (
+                      <div style={{ background: T.tealSoft, borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: T.teal, textTransform: "uppercase" }}>Comparación con el lote de IATF</div>
+                        <div style={{ fontSize: 14, color: T.teal, marginTop: 4 }}>
+                          {inseminadas} inseminadas · {s.prenadas} preñadas encontradas · <b>{pct(s.prenadas, inseminadas)}% preñez a IATF</b>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+            <button onClick={agregarRodeo} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={17} /> Agregar rodeo
+            </button>
+
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Conclusión / observaciones</label>
+              <textarea value={form.conclusion} onChange={(e) => setForm({ ...form, conclusion: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff", minHeight: 70 }} />
+            </div>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "16px", fontSize: 17, fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "19px 19px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 21, color: T.ink }}>Diagnóstico de Gestación</div>
+              <div style={{ fontSize: 14.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "13px 19px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={20} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Stethoscope size={38} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de gestación para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
+              const t = totalesInforme(inf);
+              return (
+                <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 18, color: T.ink }}>{inf.nombre || inf.establecimiento}</div>
+                      <div style={{ fontSize: 14.5, color: T.inkSoft }}>{inf.numero ? `N° ${inf.numero} · ` : ""}{inf.establecimiento} · {inf.fecha} · {inf.metodo}</div>
+                      {t.cantidad > 0 && <div style={{ fontSize: 15, color: T.gold, fontWeight: 700, marginTop: 4 }}>{pct(t.prenadas, t.cantidad)}% preñez · {t.cantidad} cabezas</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => exportarExcelGestacion(inf, cliente, iatfs)} style={{ background: "none", border: "none", color: T.gold, cursor: "pointer" }}><Download size={19} /></button>
+                      <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={19} /></button>
+                      <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={20} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function nuevoToroLote() { return { id: uid(), nombre: "", cantidad: "" }; }
+    function nuevoLote() {
+      return {
+        id: uid(), nombre: "", cantidad: "", toros: [nuevoToroLote()],
+        fechaColocacion: "", fechaRetiro: "", horaRetiroInicio: "", horaRetiroFin: "",
+        fechaIATF: "", horaIATFInicio: "", horaIATFFin: "",
+        perdidasDispositivo: "", noRespondieron: "",
+      };
+    }
+    /* Horas entre el fin del retiro del dispositivo y el inicio de la IATF (pueden ser días distintos) */
+    function horasEntreRetiroYIatf(p) {
+      if (!p.fechaRetiro || !p.horaRetiroFin || !p.fechaIATF || !p.horaIATFInicio) return null;
+      const inicio = new Date(`${p.fechaRetiro}T${p.horaRetiroFin}:00`);
+      const fin = new Date(`${p.fechaIATF}T${p.horaIATFInicio}:00`);
+      if (isNaN(inicio.getTime()) || isNaN(fin.getTime())) return null;
+      return Math.round(((fin - inicio) / 3600000) * 10) / 10;
+    }
+
+    function IatfView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        nombre: "", numero: "",
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        protocolos: [nuevoLote()],
+        observacionesGen: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarLote = (id, patch) => setForm({ ...form, protocolos: form.protocolos.map((p) => p.id === id ? { ...p, ...patch } : p) });
+      const agregarLote = () => setForm({ ...form, protocolos: [...form.protocolos, nuevoLote()] });
+      const quitarLote = (id) => setForm({ ...form, protocolos: form.protocolos.filter((p) => p.id !== id) });
+
+      const statsLote = (p) => {
+        const cant = parseFloat(p.cantidad) || 0;
+        const noResp = parseFloat(p.noRespondieron) || 0;
+        const perd = parseFloat(p.perdidasDispositivo) || 0;
+        return { cant, respondieron: Math.max(0, cant - noResp), perd, pctResp: pct(cant - noResp, cant), pctPerd: pct(perd, cant) };
+      };
+      const totalesInforme = (inf) => (inf.protocolos || []).reduce((a, p) => a + (parseFloat(p.cantidad) || 0), 0);
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Nombre del informe (opcional)</label>
+                  <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Ej: IATF Saravia 2026" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>N° de informe</label>
+                  <input value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} placeholder="Opcional" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+              </div>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff" }} />
+              )}
+            </div>
+
+            {form.protocolos.map((p, i) => {
+              const s = statsLote(p);
+              const horas = horasEntreRetiroYIatf(p);
+              const actualizarToroLote = (tid, patch) => actualizarLote(p.id, { toros: p.toros.map((t) => t.id === tid ? { ...t, ...patch } : t) });
+              const agregarToroLote = () => actualizarLote(p.id, { toros: [...p.toros, nuevoToroLote()] });
+              const quitarToroLote = (tid) => actualizarLote(p.id, { toros: p.toros.filter((t) => t.id !== tid) });
+              return (
+                <div key={p.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: T.ink }}>Lote {i + 1}</div>
+                    {form.protocolos.length > 1 && <button onClick={() => quitarLote(p.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={19} /></button>}
+                  </div>
+                  <input placeholder="Nombre del lote" value={p.nombre} onChange={(e) => actualizarLote(p.id, { nombre: e.target.value })} style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, marginBottom: 8, background: "#fff" }} />
+
+                  <label style={{ fontSize: 13, color: T.inkSoft }}>Toro/s utilizados</label>
+                  {p.toros.map((t) => (
+                    <div key={t.id} style={{ display: "grid", gridTemplateColumns: p.toros.length > 1 ? "1fr 0.5fr auto" : "1fr auto", gap: 6, marginTop: 4, marginBottom: 4 }}>
+                      <input placeholder="Nombre" value={t.nombre} onChange={(e) => actualizarToroLote(t.id, { nombre: e.target.value })} style={{ padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15.5, background: "#fff" }} />
+                      {p.toros.length > 1 && (
+                        <input type="number" placeholder="Cant." value={t.cantidad} onChange={(e) => actualizarToroLote(t.id, { cantidad: e.target.value })} style={{ padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15.5, background: "#fff" }} />
+                      )}
+                      {p.toros.length > 1 && (
+                        <button onClick={() => quitarToroLote(t.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={17} /></button>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={agregarToroLote} style={{ background: "none", border: "none", color: T.teal, fontSize: 14.5, fontWeight: 700, cursor: "pointer", padding: "4px 0 8px", display: "flex", alignItems: "center", gap: 4 }}>
+                    <Plus size={15} /> Agregar toro
+                  </button>
+                  {p.toros.length > 1 && (() => {
+                    const suma = p.toros.reduce((a, t) => a + (parseFloat(t.cantidad) || 0), 0);
+                    const total = parseFloat(p.cantidad) || 0;
+                    if (!total) return null;
+                    const ok = suma === total;
+                    return <div style={{ fontSize: 14, marginBottom: 8, fontWeight: 600, color: ok ? T.teal : T.rust }}>
+                      {ok ? "✓" : "⚠"} Suma por toro: {suma} de {total} cabezas del lote
+                    </div>;
+                  })()}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Colocación</label>
+                      <input type="date" value={p.fechaColocacion} onChange={(e) => actualizarLote(p.id, { fechaColocacion: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Fecha de retiro</label>
+                      <input type="date" value={p.fechaRetiro} onChange={(e) => actualizarLote(p.id, { fechaRetiro: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Hora inicio retiro</label>
+                      <input type="time" value={p.horaRetiroInicio} onChange={(e) => actualizarLote(p.id, { horaRetiroInicio: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Hora fin retiro</label>
+                      <input type="time" value={p.horaRetiroFin} onChange={(e) => actualizarLote(p.id, { horaRetiroFin: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, color: T.inkSoft }}>Fecha de IATF</label>
+                    <input type="date" value={p.fechaIATF} onChange={(e) => actualizarLote(p.id, { fechaIATF: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff", marginBottom: 8 }} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Hora inicio IATF</label>
+                      <input type="time" value={p.horaIATFInicio} onChange={(e) => actualizarLote(p.id, { horaIATFInicio: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Hora fin IATF</label>
+                      <input type="time" value={p.horaIATFFin} onChange={(e) => actualizarLote(p.id, { horaIATFFin: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14.5, background: "#fff" }} />
+                    </div>
+                  </div>
+                  {horas !== null && (
+                    <div style={{ background: T.tealSoft, borderRadius: 8, padding: "11px 13px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: T.teal }}>HORAS TRANSCURRIDAS (retiro → IATF)</span>
+                      <span style={{ fontWeight: 700, fontSize: 18, color: T.teal }}>{horas} h</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Cantidad</label>
+                      <input type="number" value={p.cantidad} onChange={(e) => actualizarLote(p.id, { cantidad: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>Perd. dispositivo</label>
+                      <input type="number" value={p.perdidasDispositivo} onChange={(e) => actualizarLote(p.id, { perdidasDispositivo: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 13, color: T.inkSoft }}>No respondieron</label>
+                      <input type="number" value={p.noRespondieron} onChange={(e) => actualizarLote(p.id, { noRespondieron: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} />
+                    </div>
+                  </div>
+                  {s.cant > 0 && (
+                    <div style={{ fontSize: 15, fontWeight: 700, color: T.teal }}>{s.pctResp}% respuesta · {s.pctPerd}% pérdida dispositivo</div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={agregarLote} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={17} /> Agregar lote
+            </button>
+
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Observaciones generales</label>
+              <textarea value={form.observacionesGen} onChange={(e) => setForm({ ...form, observacionesGen: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff", minHeight: 70 }} />
+            </div>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "16px", fontSize: 17, fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "19px 19px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 21, color: T.ink }}>Inseminación Artificial</div>
+              <div style={{ fontSize: 14.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "13px 19px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={20} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Syringe size={38} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de IATF para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => (
+              <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 18, color: T.ink }}>{inf.nombre || inf.establecimiento}</div>
+                    <div style={{ fontSize: 14.5, color: T.inkSoft }}>{inf.numero ? `N° ${inf.numero} · ` : ""}{inf.establecimiento} · {inf.fecha}</div>
+                    <div style={{ fontSize: 15, color: T.teal, fontWeight: 700, marginTop: 4 }}>{totalesInforme(inf)} inseminadas</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => exportarExcelIatf(inf, cliente)} style={{ background: "none", border: "none", color: T.gold, cursor: "pointer" }}><Download size={19} /></button>
+                    <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={19} /></button>
+                    <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={20} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    const ESTADOS_TORO = [
+      { v: "apto", label: "Apto", color: T.gold, bg: T.goldSoft },
+      { v: "tratamiento", label: "A tratamiento", color: T.teal, bg: T.tealSoft },
+      { v: "descarte", label: "Descarte", color: T.rust, bg: "#E7C9B7" },
+    ];
+    function nuevoToro() {
+      return {
+        id: uid(), tubo: "", rp: "", electronica: "", raza: "", origen: "", rodeo: "",
+        ce: "", tono: "", cc: "", estado: "apto", motivoDescarte: "", observaciones: "",
+      };
+    }
+
+    function buscarEnBase(torosBase, clienteId, rp, electronica) {
+      if (!rp && !electronica) return null;
+      return torosBase.find((b) => b.clienteId === clienteId && ((rp && b.rp === rp) || (electronica && b.electronica === electronica))) || null;
+    }
+
+    function TarjetaToro({ t, idx, expandido, onExpandir, onActualizar, onQuitar, sePuedeQuitar, torosBase, clienteId }) {
+      const est = ESTADOS_TORO.find((e) => e.v === t.estado);
+      const baseCliente = torosBase.filter((b) => b.clienteId === clienteId);
+      const match = buscarEnBase(baseCliente, clienteId, t.rp, t.electronica);
+      const esNuevo = !match && baseCliente.length > 0 && (t.rp || t.electronica);
+
+      const aplicarMatch = (m) => {
+        if (!m) return;
+        onActualizar({
+          rp: m.rp || t.rp, electronica: m.electronica || t.electronica,
+          raza: m.raza || t.raza, origen: m.origen || t.origen, rodeo: m.rodeo || t.rodeo,
+          ce: m.ce || t.ce, tono: m.tono || t.tono, cc: m.cc || t.cc,
+          estado: m.estado || t.estado, motivoDescarte: m.motivoDescarte || t.motivoDescarte,
+          observaciones: m.observaciones || t.observaciones,
+        });
+        if (m.estado === "descarte") playBeep("negativo");
+      };
+      /* Si se borraron RP y electrónica, limpiamos los datos que se habían traído de la base
+         para no dejar pegados por error datos de otro toro */
+      const limpiarSiVacio = () => {
+        if (!t.rp && !t.electronica) {
+          onActualizar({ raza: "", origen: "", rodeo: "", ce: "", tono: "", cc: "", estado: "apto", motivoDescarte: "", observaciones: "" });
+        }
+      };
+
+      if (!expandido) {
+        return (
+          <div onClick={onExpandir} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 12, padding: 12, marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, color: T.ink }}>#{t.tubo || idx + 1} · RP {t.rp || "-"}</div>
+              <div style={{ fontSize: 14, color: T.inkSoft }}>{t.raza}{t.ce ? ` · CE ${t.ce} cm` : ""}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {esNuevo && <span style={{ background: "#E7C9B7", color: T.rust, fontSize: 13, fontWeight: 700, padding: "5px 10px", borderRadius: 20 }}>Nuevo</span>}
+              {est && <span style={{ background: est.bg, color: est.color, fontSize: 13, fontWeight: 700, padding: "5px 10px", borderRadius: 20 }}>{est.label}</span>}
+              <ChevronDown size={21} style={{ color: T.inkSoft }} />
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
+          <div onClick={onExpandir} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, cursor: "pointer" }}>
+            <div style={{ fontWeight: 700, color: T.ink }}>Toro {idx + 1}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {sePuedeQuitar && <button onClick={(e) => { e.stopPropagation(); onQuitar(); }} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={19} /></button>}
+              <ChevronUp size={21} style={{ color: T.inkSoft }} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>N° Tubo</label>
+              <input value={t.tubo} onChange={(e) => onActualizar({ tubo: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>RP</label>
+              <input value={t.rp} onChange={(e) => onActualizar({ rp: e.target.value })}
+                onBlur={() => { aplicarMatch(buscarEnBase(baseCliente, clienteId, t.rp, "")); limpiarSiVacio(); }}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+          </div>
+          <div style={{ marginBottom: 8 }}><label style={{ fontSize: 13, color: T.inkSoft }}>Electrónica (caravana)</label>
+            <input value={t.electronica} onChange={(e) => onActualizar({ electronica: e.target.value })}
+              onBlur={() => { aplicarMatch(buscarEnBase(baseCliente, clienteId, "", t.electronica)); limpiarSiVacio(); }}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+
+          {match && match.estado === "descarte" && (
+            <div style={{
+              background: T.rust, borderRadius: 10, padding: "15px 17px", marginBottom: 10,
+              display: "flex", alignItems: "flex-start", gap: 10, border: `2px solid ${T.ink}`,
+            }}>
+              <AlertTriangle size={25} style={{ color: "#fff", flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <div style={{ color: "#fff", fontWeight: 800, fontSize: 16.5 }}>⚠ TORO DESCARTADO EN LA BASE</div>
+                <div style={{ color: "#fff", fontSize: 14.5, marginTop: 3 }}>
+                  {match.motivoDescarte ? `Motivo: ${match.motivoDescarte}` : ""}{match.observaciones ? ` · ${match.observaciones}` : ""}
+                </div>
+                <div style={{ color: "#fff", fontSize: 14, marginTop: 4, fontWeight: 600 }}>Confirmá si sigue en descarte o si cambió su condición.</div>
+              </div>
+            </div>
+          )}
+          {match && match.estado !== "descarte" && (
+            <div style={{ background: T.goldSoft, borderRadius: 8, padding: "11px 13px", marginBottom: 10, fontSize: 14.5, color: T.gold }}>
+              Encontrado en la base — datos completados solos, revisá y actualizá lo que cambió.
+            </div>
+          )}
+          {esNuevo && (
+            <div style={{ background: "#E7C9B7", color: T.rust, borderRadius: 8, padding: "11px 13px", marginBottom: 10, fontSize: 14.5, fontWeight: 700 }}>
+              Toro nuevo: no está en la base cargada para este cliente.
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>Raza</label>
+              <input value={t.raza} onChange={(e) => onActualizar({ raza: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>Origen</label>
+              <input value={t.origen} onChange={(e) => onActualizar({ origen: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>C.E. (cm)</label>
+              <input value={t.ce} onChange={(e) => onActualizar({ ce: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>Tono</label>
+              <input value={t.tono} onChange={(e) => onActualizar({ tono: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 13, color: T.inkSoft }}>C.C.</label>
+              <input value={t.cc} onChange={(e) => onActualizar({ cc: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+          </div>
+          <label style={{ fontSize: 13, color: T.inkSoft }}>Estado</label>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {ESTADOS_TORO.map((e) => (
+              <button key={e.v} onClick={() => onActualizar({ estado: e.v })} style={{
+                flex: 1, padding: "10px 6px", borderRadius: 8, fontSize: 14.5, fontWeight: 700, cursor: "pointer",
+                border: `1.5px solid ${t.estado === e.v ? e.color : T.line}`, background: t.estado === e.v ? e.bg : "#fff", color: e.color,
+              }}>{e.label}</button>
+            ))}
+          </div>
+          {t.estado === "descarte" && (
+            <div style={{ marginBottom: 8 }}><label style={{ fontSize: 13, color: T.inkSoft }}>Motivo de descarte</label>
+              <input value={t.motivoDescarte} onChange={(e) => onActualizar({ motivoDescarte: e.target.value })} placeholder="Ej: Atrofia testicular" style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+          )}
+          <label style={{ fontSize: 13, color: T.inkSoft }}>Observaciones</label>
+          <textarea value={t.observaciones} onChange={(e) => onActualizar({ observaciones: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff", minHeight: 50 }} />
+        </div>
+      );
+    }
+
+    function AndrologicoView({ cliente, informes, guardar, borrar, estadoSync, torosBase, guardarBase }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        nombre: "", numero: "",
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        toros: [nuevoToro()],
+      });
+      const [form, setForm] = useState(vacio());
+      const [expandidoId, setExpandidoId] = useState(null);
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { const v = vacio(); setEditando(null); setForm(v); setExpandidoId(v.toros[0].id); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setExpandidoId(null); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        form.toros.forEach((t) => {
+          if (!t.rp && !t.electronica) return;
+          const baseCliente = torosBase.filter((b) => b.clienteId === cliente.id);
+          const existente = buscarEnBase(baseCliente, cliente.id, t.rp, t.electronica);
+          guardarBase({
+            id: existente ? existente.id : undefined, clienteId: cliente.id,
+            rp: t.rp, electronica: t.electronica, raza: t.raza, origen: t.origen, rodeo: t.rodeo,
+            ce: t.ce, tono: t.tono, cc: t.cc, estado: t.estado, motivoDescarte: t.motivoDescarte, observaciones: t.observaciones,
+          });
+        });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const fileRef = useRef(null);
+      const [msgImport, setMsgImport] = useState("");
+      const handleImportar = async (e) => {
+        const file = e.target.files[0];
+        e.target.value = "";
+        if (!file) return;
+        setMsgImport("Leyendo archivo...");
+        try {
+          const filas = await parseExcelToros(file);
+          if (!filas.length) { setMsgImport("Se leyó el archivo pero no se encontraron filas con RP o electrónica."); return; }
+          let count = 0;
+          for (const t of filas) {
+            const baseCliente = torosBase.filter((b) => b.clienteId === cliente.id);
+            const existente = buscarEnBase(baseCliente, cliente.id, t.rp, t.electronica);
+            guardarBase({ id: existente ? existente.id : undefined, clienteId: cliente.id, ...t });
+            count++;
+          }
+          setMsgImport(`${count} toros importados/actualizados en la base de este cliente.`);
+        } catch (err) {
+          setMsgImport("No se pudo leer el archivo: " + (err.message || "error desconocido"));
+        }
+      };
+
+      const actualizarToro = (id, patch) => setForm({ ...form, toros: form.toros.map((t) => t.id === id ? { ...t, ...patch } : t) });
+      const agregarToro = () => { const nuevo = nuevoToro(); setForm({ ...form, toros: [...form.toros, nuevo] }); setExpandidoId(nuevo.id); };
+      const quitarToro = (id) => setForm({ ...form, toros: form.toros.filter((t) => t.id !== id) });
+
+      const resumen = (inf) => {
+        const toros = inf.toros || [];
+        const aptos = toros.filter((t) => t.estado === "apto").length;
+        return `${aptos}/${toros.length} aptos`;
+      };
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Nombre del informe (opcional)</label>
+                  <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Ej: Andrológico Saravia 2026" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>N° de informe</label>
+                  <input value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} placeholder="Opcional" style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+              </div>
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 12px", background: "#fff" }} />
+              <label style={{ fontSize: 14.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "13px 15px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 17, margin: "6px 0 0", background: "#fff" }} />
+              )}
+            </div>
+
+            <input type="file" ref={fileRef} accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleImportar} />
+            <button onClick={() => fileRef.current && fileRef.current.click()} style={{
+              width: "100%", background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", marginBottom: 6,
+              color: T.teal, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}>
+              <Download size={19} style={{ transform: "rotate(180deg)" }} /> Importar toros (Excel)
+            </button>
+            <div style={{ fontSize: 14, color: T.inkSoft, marginBottom: 14 }}>
+              {torosBase.filter((b) => b.clienteId === cliente.id).length} toros en la base de este cliente (se usa la misma en todos sus establecimientos).
+              {msgImport && <span style={{ display: "block", marginTop: 4, color: T.teal, fontWeight: 600 }}>{msgImport}</span>}
+            </div>
+
+            <div style={{ fontSize: 14, fontWeight: 700, color: T.inkSoft, textTransform: "uppercase", marginBottom: 8 }}>Toros examinados</div>
+            {form.toros.map((t, i) => (
+              <TarjetaToro key={t.id} t={t} idx={i} expandido={expandidoId === t.id}
+                onExpandir={() => setExpandidoId(expandidoId === t.id ? null : t.id)}
+                onActualizar={(patch) => actualizarToro(t.id, patch)}
+                onQuitar={() => quitarToro(t.id)} sePuedeQuitar={form.toros.length > 1}
+                torosBase={torosBase} clienteId={cliente.id} />
+            ))}
+            <button onClick={agregarToro} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={17} /> Agregar toro
+            </button>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "16px", fontSize: 17, fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "19px 19px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 21, color: T.ink }}>Examen Andrológico</div>
+              <div style={{ fontSize: 14.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "13px 19px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={20} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 12px" }}>
+            <input type="file" ref={fileRef} accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleImportar} />
+            <button onClick={() => fileRef.current && fileRef.current.click()} style={{
+              width: "100%", background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px",
+              color: T.teal, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}>
+              <Download size={19} style={{ transform: "rotate(180deg)" }} /> Importar toros (Excel)
+            </button>
+            <div style={{ fontSize: 14, color: T.inkSoft, marginTop: 6 }}>
+              {torosBase.filter((b) => b.clienteId === cliente.id).length} toros en la base de este cliente.
+              {msgImport && <span style={{ display: "block", marginTop: 4, color: T.teal, fontWeight: 600 }}>{msgImport}</span>}
+            </div>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <ClipboardCheck size={38} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay exámenes andrológicos para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => (
+              <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 18, color: T.ink }}>{inf.nombre || inf.establecimiento}</div>
+                    <div style={{ fontSize: 14.5, color: T.inkSoft }}>{inf.numero ? `N° ${inf.numero} · ` : ""}{inf.establecimiento} · {inf.fecha}</div>
+                    <div style={{ fontSize: 15, color: T.gold, fontWeight: 700, marginTop: 4 }}>{resumen(inf)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => exportarExcelAndrologico(inf, cliente)} style={{ background: "none", border: "none", color: T.gold, cursor: "pointer" }}><Download size={19} /></button>
+                    <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={19} /></button>
+                    <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={20} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function BarraNav({ tab, setTab }) {
+      const tabs = [
+        { k: "clientes", label: "Clientes", icon: Users, activo: true },
+        { k: "preservicio", label: "Preservicio", icon: ListChecks, activo: true },
+        { k: "gestacion", label: "Gestación", icon: Stethoscope, activo: true },
+        { k: "iatf", label: "IATF", icon: Syringe, activo: true },
+        { k: "andrologico", label: "Andrológico", icon: ClipboardCheck, activo: true },
+      ];
+      return (
+        <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 900, background: T.card, borderTop: `1.5px solid ${T.line}`, display: "flex", padding: "10px 6px" }}>
+          {tabs.map(({ k, label, icon: Icon, activo }) => (
+            <button key={k} disabled={!activo} onClick={() => activo && setTab(k)} style={{
+              flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+              padding: "6px 2px", color: !activo ? "#B8AF95" : (tab === k ? T.rust : T.inkSoft), cursor: activo ? "pointer" : "default",
+            }}>
+              <Icon size={22} />
+              <span style={{ fontSize: 12 }}>{activo ? label : label + " (pronto)"}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function App() {
+      const { lista: clientes, guardar: guardarCliente, borrar: borrarCliente, estadoSync: syncClientes } = useCollection("clientes");
+      const { lista: preservicios, guardar: guardarPreservicio, borrar: borrarPreservicio, estadoSync: syncPreservicio } = useCollection("preservicios");
+      const { lista: gestaciones, guardar: guardarGestacion, borrar: borrarGestacion, estadoSync: syncGestacion } = useCollection("gestaciones");
+      const { lista: iatfs, guardar: guardarIatf, borrar: borrarIatf, estadoSync: syncIatf } = useCollection("iatfs");
+      const { lista: andrologicos, guardar: guardarAndrologico, borrar: borrarAndrologico, estadoSync: syncAndrologico } = useCollection("andrologicos");
+      const { lista: torosBase, guardar: guardarBase } = useCollection("toros_base");
+      const [tab, setTab] = useState("clientes");
+      const [clienteId, setClienteId] = useState(null);
+      const clienteActivo = clientes.find((c) => c.id === clienteId) || null;
+
+      const irACliente = (c) => { setClienteId(c.id); setTab("preservicio"); };
+
+      return (
+        <div style={{ fontFamily: "Inter, sans-serif", background: T.paper, minHeight: "100vh", maxWidth: 900, margin: "0 auto", color: T.ink }}>
+          {tab === "clientes" && (
+            <ClientesView clientes={clientes} guardar={guardarCliente} borrar={borrarCliente} estadoSync={syncClientes} onSeleccionar={irACliente} />
+          )}
+          {tab === "preservicio" && (
+            clienteActivo ? (
+              <PreservicioView cliente={clienteActivo} informes={preservicios} guardar={guardarPreservicio} borrar={borrarPreservicio} estadoSync={syncPreservicio} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "gestacion" && (
+            clienteActivo ? (
+              <GestacionView cliente={clienteActivo} informes={gestaciones} guardar={guardarGestacion} borrar={borrarGestacion} estadoSync={syncGestacion} iatfs={iatfs} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "iatf" && (
+            clienteActivo ? (
+              <IatfView cliente={clienteActivo} informes={iatfs} guardar={guardarIatf} borrar={borrarIatf} estadoSync={syncIatf} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "andrologico" && (
+            clienteActivo ? (
+              <AndrologicoView cliente={clienteActivo} informes={andrologicos} guardar={guardarAndrologico} borrar={borrarAndrologico} estadoSync={syncAndrologico} torosBase={torosBase} guardarBase={guardarBase} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          <BarraNav tab={tab} setTab={setTab} />
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
