@@ -71,7 +71,7 @@
   <script type="text/babel" data-type="module" data-presets="react">
     import React, { useState, useEffect } from "react";
     import { createRoot } from "react-dom/client";
-    import { Users, Plus, X, Trash2, Pencil, Wifi, WifiOff, ListChecks } from "lucide-react";
+    import { Users, Plus, X, Trash2, Pencil, Wifi, WifiOff, ListChecks, Stethoscope } from "lucide-react";
     import { initializeApp } from "firebase/app";
     import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from "firebase/firestore";
 
@@ -87,8 +87,8 @@
     const db = getFirestore(fbApp);
 
     const DB_NAME = "reprobovina_local";
-    const DB_VERSION = 2;
-    const COLECCIONES = ["clientes", "preservicios"];
+    const DB_VERSION = 3;
+    const COLECCIONES = ["clientes", "preservicios", "gestaciones"];
 
     function abrirDB() {
       return new Promise((resolve, reject) => {
@@ -445,11 +445,144 @@
       );
     }
 
+    function nuevoRodeo() { return { id: uid(), categoria: "", cantidad: "", prenadas: "", observaciones: "" }; }
+
+    function GestacionView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        metodo: "Tacto rectal",
+        rodeos: [nuevoRodeo()],
+        conclusion: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarRodeo = (id, patch) => setForm({ ...form, rodeos: form.rodeos.map((r) => r.id === id ? { ...r, ...patch } : r) });
+      const agregarRodeo = () => setForm({ ...form, rodeos: [...form.rodeos, nuevoRodeo()] });
+      const quitarRodeo = (id) => setForm({ ...form, rodeos: form.rodeos.filter((r) => r.id !== id) });
+
+      const totalesInforme = (inf) => (inf.rodeos || []).reduce((acc, r) => {
+        acc.cantidad += parseFloat(r.cantidad) || 0;
+        acc.prenadas += parseFloat(r.prenadas) || 0;
+        return acc;
+      }, { cantidad: 0, prenadas: 0 });
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+              )}
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Método</label>
+              <select value={form.metodo} onChange={(e) => setForm({ ...form, metodo: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }}>
+                <option>Tacto rectal</option>
+                <option>Ecografía</option>
+              </select>
+            </div>
+
+            {form.rodeos.map((r, i) => {
+              const cant = parseFloat(r.cantidad) || 0;
+              const pren = parseFloat(r.prenadas) || 0;
+              return (
+                <div key={r.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: T.ink }}>Rodeo {i + 1}</div>
+                    {form.rodeos.length > 1 && <button onClick={() => quitarRodeo(r.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={16} /></button>}
+                  </div>
+                  <input placeholder="Categoría (ej: Vaquillonas)" value={r.categoria} onChange={(e) => actualizarRodeo(r.id, { categoria: e.target.value })} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <input type="number" placeholder="Cantidad" value={r.cantidad} onChange={(e) => actualizarRodeo(r.id, { cantidad: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input type="number" placeholder="Preñadas" value={r.prenadas} onChange={(e) => actualizarRodeo(r.id, { prenadas: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                  </div>
+                  {cant > 0 && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{pct(pren, cant)}% preñez ({pren} de {cant})</div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={agregarRodeo} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={14} /> Agregar rodeo
+            </button>
+
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Conclusión / observaciones</label>
+              <textarea value={form.conclusion} onChange={(e) => setForm({ ...form, conclusion: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff", minHeight: 70 }} />
+            </div>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Diagnóstico de Gestación</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Stethoscope size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de gestación para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
+              const t = totalesInforme(inf);
+              return (
+                <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: 16, color: T.ink }}>{inf.establecimiento}</div>
+                      <div style={{ fontSize: 12.5, color: T.inkSoft }}>{inf.fecha} · {inf.metodo}</div>
+                      {t.cantidad > 0 && <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, marginTop: 4 }}>{pct(t.prenadas, t.cantidad)}% preñez · {t.cantidad} cabezas</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
     function BarraNav({ tab, setTab }) {
       const tabs = [
         { k: "clientes", label: "Clientes", icon: Users, activo: true },
         { k: "preservicio", label: "Preservicio", icon: ListChecks, activo: true },
-        { k: "gestacion", label: "Gestación", icon: ListChecks, activo: false },
+        { k: "gestacion", label: "Gestación", icon: Stethoscope, activo: true },
         { k: "iatf", label: "IATF", icon: ListChecks, activo: false },
         { k: "andrologico", label: "Andrológico", icon: ListChecks, activo: false },
       ];
@@ -471,6 +604,7 @@
     function App() {
       const { lista: clientes, guardar: guardarCliente, borrar: borrarCliente, estadoSync: syncClientes } = useCollection("clientes");
       const { lista: preservicios, guardar: guardarPreservicio, borrar: borrarPreservicio, estadoSync: syncPreservicio } = useCollection("preservicios");
+      const { lista: gestaciones, guardar: guardarGestacion, borrar: borrarGestacion, estadoSync: syncGestacion } = useCollection("gestaciones");
       const [tab, setTab] = useState("clientes");
       const [clienteId, setClienteId] = useState(null);
       const clienteActivo = clientes.find((c) => c.id === clienteId) || null;
@@ -485,6 +619,15 @@
           {tab === "preservicio" && (
             clienteActivo ? (
               <PreservicioView cliente={clienteActivo} informes={preservicios} guardar={guardarPreservicio} borrar={borrarPreservicio} estadoSync={syncPreservicio} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "gestacion" && (
+            clienteActivo ? (
+              <GestacionView cliente={clienteActivo} informes={gestaciones} guardar={guardarGestacion} borrar={borrarGestacion} estadoSync={syncGestacion} />
             ) : (
               <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
                 Elegí un cliente primero desde la pestaña Clientes.
