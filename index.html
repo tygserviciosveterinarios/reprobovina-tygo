@@ -181,6 +181,52 @@
     };
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
+    let _audioCtx = null;
+    let _audioUnlocked = false;
+    function _desbloquearAudio(ctx) {
+      if (_audioUnlocked) return;
+      try {
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer; src.connect(ctx.destination); src.start(0);
+      } catch (e) {}
+      _audioUnlocked = true;
+    }
+    function _tocarTono(ctx, kind) {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      if (kind === "negativo") {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(260, now + 0.16);
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.start(now); osc.stop(now + 0.19);
+      } else {
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(720, now);
+        osc.frequency.exponentialRampToValueAtTime(980, now + 0.1);
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+        osc.start(now); osc.stop(now + 0.15);
+      }
+    }
+    /* kind: "positivo" (preñada/apta) o "negativo" (vacía/descarte) */
+    function playBeep(kind) {
+      try {
+        if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = _audioCtx;
+        _desbloquearAudio(ctx);
+        if (ctx.state === "suspended" || ctx.state === "interrupted") {
+          ctx.resume().then(() => _tocarTono(ctx, kind)).catch(() => {});
+        } else {
+          _tocarTono(ctx, kind);
+        }
+      } catch (e) {}
+    }
+
     function EstadoConexion({ estado }) {
       const config = {
         online: { icon: Wifi, texto: "En línea · sincronizado", color: T.teal, bg: T.tealSoft },
@@ -245,8 +291,8 @@
     }
 
     function exportarExcelPreservicio(inf, cliente) {
-      const rev = parseFloat(inf.revisadas) || 0;
-      const apt = parseFloat(inf.aptas) || 0;
+      const st = statsPreservicio(inf);
+      const rev = st.revisadas, apt = st.aptas;
       const filas = [
         ["INFORME DE PRESERVICIO"],
         ["Cliente", cliente.nombre], ["Establecimiento", inf.establecimiento], ["Fecha", inf.fecha],
@@ -254,7 +300,7 @@
         ["Revisadas", rev], ["Aptas", apt], ["% Aptas", `${pct(apt, rev)}%`], ["% Descarte", `${pct(rev - apt, rev)}%`],
         [],
         ["Motivos de descarte"],
-        ["Pelvimetría", inf.descPelvimetria || 0], ["GDR", inf.descGdr || 0], ["Tamaño", inf.descTamano || 0], ["Otras", inf.descOtras || 0],
+        ["Pelvimetría", st.descPelvimetria || 0], ["GDR", st.descGdr || 0], ["Tamaño", st.descTamano || 0], ["Otras", st.descOtras || 0],
         [], ["Observaciones", inf.observaciones || ""],
       ];
       const ws = XLSX.utils.aoa_to_sheet(filas);
@@ -273,10 +319,9 @@
       ];
       let totCant = 0, totPren = 0;
       (inf.rodeos || []).forEach((r, i) => {
-        const cant = parseFloat(r.cantidad) || 0;
-        const pren = parseFloat(r.prenadas) || 0;
-        totCant += cant; totPren += pren;
-        filas.push([i + 1, r.categoria || "", cant, pren, `${pct(pren, cant)}%`, r.observaciones || ""]);
+        const s = statsRodeo(r);
+        totCant += s.cantidad; totPren += s.prenadas;
+        filas.push([i + 1, r.categoria || "", s.cantidad, s.prenadas, `${pct(s.prenadas, s.cantidad)}%`, r.observaciones || ""]);
       });
       filas.push(["TOTAL", "", totCant, totPren, `${pct(totPren, totCant)}%`, ""]);
       filas.push([], ["Conclusión", inf.conclusion || ""]);
@@ -424,13 +469,86 @@
       );
     }
 
+    function statsPreservicio(f) {
+      if (f.modoCarga === "rapida") {
+        const animales = f.animales || [];
+        const conteo = { "Pelvimetría": 0, "GDR": 0, "Tamaño": 0, "Otras": 0 };
+        animales.forEach((a) => { if (a.resultado === "Descarte" && a.motivo) conteo[a.motivo] = (conteo[a.motivo] || 0) + 1; });
+        return {
+          revisadas: animales.length, aptas: animales.filter((a) => a.resultado === "Apta").length,
+          descPelvimetria: conteo["Pelvimetría"], descGdr: conteo["GDR"], descTamano: conteo["Tamaño"], descOtras: conteo["Otras"],
+        };
+      }
+      return {
+        revisadas: parseFloat(f.revisadas) || 0, aptas: parseFloat(f.aptas) || 0,
+        descPelvimetria: parseFloat(f.descPelvimetria) || 0, descGdr: parseFloat(f.descGdr) || 0,
+        descTamano: parseFloat(f.descTamano) || 0, descOtras: parseFloat(f.descOtras) || 0,
+      };
+    }
+
+    function PreservicioQuickEntry({ form, onChange }) {
+      const [caravana, setCaravana] = useState("");
+      const [pendienteDescarte, setPendienteDescarte] = useState(false);
+      const animales = form.animales || [];
+      const agregar = (resultado, motivo) => {
+        const nuevo = { id: uid(), caravana: caravana.trim(), resultado, motivo: motivo || "" };
+        onChange({ animales: [...animales, nuevo] });
+        playBeep(resultado === "Apta" ? "positivo" : "negativo");
+        setCaravana(""); setPendienteDescarte(false);
+      };
+      const borrar = (id) => onChange({ animales: animales.filter((a) => a.id !== id) });
+      const aptas = animales.filter((a) => a.resultado === "Apta").length;
+      const descartes = animales.length - aptas;
+      return (
+        <div>
+          <input value={caravana} onChange={(e) => setCaravana(e.target.value)} placeholder="Caravana (opcional)"
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+          {!pendienteDescarte ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <button onClick={() => agregar("Apta")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>Apta</button>
+              <button onClick={() => setPendienteDescarte(true)} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.rust, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>Descarte</button>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 6 }}>Motivo del descarte:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                {["Pelvimetría", "GDR", "Tamaño", "Otras"].map((m) => (
+                  <button key={m} onClick={() => agregar("Descarte", m)} style={{ padding: "12px", borderRadius: 10, border: `1.5px solid ${T.rust}`, background: "#E7C9B7", color: T.rust, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>{m}</button>
+                ))}
+              </div>
+              <button onClick={() => setPendienteDescarte(false)} style={{ background: "none", border: "none", color: T.teal, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 13, fontWeight: 700 }}>
+            <span style={{ color: T.gold }}>{aptas} aptas</span>
+            <span style={{ color: T.rust }}>{descartes} descarte</span>
+            <span style={{ color: T.inkSoft }}>{animales.length} total</span>
+          </div>
+          {animales.length > 0 && (
+            <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              {[...animales].reverse().map((a) => (
+                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+                  <span>{a.caravana || "s/n"}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: a.resultado === "Apta" ? T.gold : T.rust, fontWeight: 700 }}>{a.resultado}{a.motivo ? ` (${a.motivo})` : ""}</span>
+                    <button onClick={() => borrar(a.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={13} /></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function PreservicioView({ cliente, informes, guardar, borrar, estadoSync }) {
       const [vista, setVista] = useState("lista"); // lista | form
       const [editando, setEditando] = useState(null);
       const vacio = () => ({
         fecha: new Date().toISOString().slice(0, 10),
         establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
-        revisadas: "", aptas: "",
+        modoCarga: "totales",
+        revisadas: "", aptas: "", animales: [],
         descPelvimetria: "", descGdr: "", descTamano: "", descOtras: "",
         observaciones: "",
       });
@@ -446,8 +564,8 @@
       };
       const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
 
-      const revisadas = parseFloat(form.revisadas) || 0;
-      const aptas = parseFloat(form.aptas) || 0;
+      const s = statsPreservicio(form);
+      const revisadas = s.revisadas, aptas = s.aptas;
       const descarte = Math.max(0, revisadas - aptas);
 
       if (vista === "form") {
@@ -467,16 +585,31 @@
                 <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Revisadas</label>
-                  <input type="number" value={form.revisadas} onChange={(e) => setForm({ ...form, revisadas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Aptas</label>
-                  <input type="number" value={form.aptas} onChange={(e) => setForm({ ...form, aptas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
-                </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <button onClick={() => setForm({ ...form, modoCarga: "totales" })} style={{
+                  flex: 1, padding: "7px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                  border: `1.5px solid ${form.modoCarga !== "rapida" ? T.teal : T.line}`, background: form.modoCarga !== "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                }}>Totales</button>
+                <button onClick={() => setForm({ ...form, modoCarga: "rapida" })} style={{
+                  flex: 1, padding: "7px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                  border: `1.5px solid ${form.modoCarga === "rapida" ? T.teal : T.line}`, background: form.modoCarga === "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                }}>Carga rápida (por toque)</button>
               </div>
+
+              {form.modoCarga === "rapida" ? (
+                <PreservicioQuickEntry form={form} onChange={(patch) => setForm({ ...form, ...patch })} />
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Revisadas</label>
+                    <input type="number" value={form.revisadas} onChange={(e) => setForm({ ...form, revisadas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Aptas</label>
+                    <input type="number" value={form.aptas} onChange={(e) => setForm({ ...form, aptas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                  </div>
+                </div>
+              )}
 
               {revisadas > 0 && (
                 <div style={{ background: T.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 12, display: "flex", justifyContent: "space-around", textAlign: "center" }}>
@@ -485,13 +618,17 @@
                 </div>
               )}
 
-              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Motivos de descarte (opcional)</label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: "6px 0 12px" }}>
-                <input type="number" placeholder="Pelvimetría" value={form.descPelvimetria} onChange={(e) => setForm({ ...form, descPelvimetria: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
-                <input type="number" placeholder="GDR" value={form.descGdr} onChange={(e) => setForm({ ...form, descGdr: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
-                <input type="number" placeholder="Tamaño" value={form.descTamano} onChange={(e) => setForm({ ...form, descTamano: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
-                <input type="number" placeholder="Otras" value={form.descOtras} onChange={(e) => setForm({ ...form, descOtras: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
-              </div>
+              {form.modoCarga !== "rapida" && (
+                <React.Fragment>
+                  <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Motivos de descarte (opcional)</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: "6px 0 12px" }}>
+                    <input type="number" placeholder="Pelvimetría" value={form.descPelvimetria} onChange={(e) => setForm({ ...form, descPelvimetria: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input type="number" placeholder="GDR" value={form.descGdr} onChange={(e) => setForm({ ...form, descGdr: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input type="number" placeholder="Tamaño" value={form.descTamano} onChange={(e) => setForm({ ...form, descTamano: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input type="number" placeholder="Otras" value={form.descOtras} onChange={(e) => setForm({ ...form, descOtras: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                  </div>
+                </React.Fragment>
+              )}
 
               <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Observaciones</label>
               <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff", minHeight: 70 }} />
@@ -522,8 +659,8 @@
               </div>
             )}
             {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
-              const rev = parseFloat(inf.revisadas) || 0;
-              const apt = parseFloat(inf.aptas) || 0;
+              const stInf = statsPreservicio(inf);
+              const rev = stInf.revisadas, apt = stInf.aptas;
               return (
                 <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -546,7 +683,56 @@
       );
     }
 
-    function nuevoRodeo() { return { id: uid(), categoria: "", cantidad: "", prenadas: "", observaciones: "" }; }
+    function nuevoRodeo() { return { id: uid(), categoria: "", modoCarga: "totales", cantidad: "", prenadas: "", animales: [], observaciones: "" }; }
+    function statsRodeo(r) {
+      if (r.modoCarga === "rapida") {
+        const animales = r.animales || [];
+        return { cantidad: animales.length, prenadas: animales.filter((a) => a.resultado === "Preñada").length };
+      }
+      return { cantidad: parseFloat(r.cantidad) || 0, prenadas: parseFloat(r.prenadas) || 0 };
+    }
+
+    function RodeoQuickEntry({ rodeo, onChange }) {
+      const [caravana, setCaravana] = useState("");
+      const animales = rodeo.animales || [];
+      const marcar = (resultado) => {
+        const nuevo = { id: uid(), caravana: caravana.trim(), resultado };
+        onChange({ animales: [...animales, nuevo] });
+        playBeep(resultado === "Preñada" ? "positivo" : "negativo");
+        setCaravana("");
+      };
+      const borrarAnimal = (id) => onChange({ animales: animales.filter((a) => a.id !== id) });
+      const pren = animales.filter((a) => a.resultado === "Preñada").length;
+      const vac = animales.length - pren;
+      return (
+        <div>
+          <input value={caravana} onChange={(e) => setCaravana(e.target.value)} placeholder="Caravana (opcional)"
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <button onClick={() => marcar("Preñada")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>Preñada</button>
+            <button onClick={() => marcar("Vacía")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.rust, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>Vacía</button>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 13, fontWeight: 700 }}>
+            <span style={{ color: T.gold }}>{pren} preñadas</span>
+            <span style={{ color: T.rust }}>{vac} vacías</span>
+            <span style={{ color: T.inkSoft }}>{animales.length} total</span>
+          </div>
+          {animales.length > 0 && (
+            <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              {[...animales].reverse().map((a) => (
+                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+                  <span>{a.caravana || "s/n"}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: a.resultado === "Preñada" ? T.gold : T.rust, fontWeight: 700 }}>{a.resultado}</span>
+                    <button onClick={() => borrarAnimal(a.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={13} /></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
 
     function GestacionView({ cliente, informes, guardar, borrar, estadoSync }) {
       const [vista, setVista] = useState("lista");
@@ -574,8 +760,9 @@
       const quitarRodeo = (id) => setForm({ ...form, rodeos: form.rodeos.filter((r) => r.id !== id) });
 
       const totalesInforme = (inf) => (inf.rodeos || []).reduce((acc, r) => {
-        acc.cantidad += parseFloat(r.cantidad) || 0;
-        acc.prenadas += parseFloat(r.prenadas) || 0;
+        const s = statsRodeo(r);
+        acc.cantidad += s.cantidad;
+        acc.prenadas += s.prenadas;
         return acc;
       }, { cantidad: 0, prenadas: 0 });
 
@@ -604,8 +791,7 @@
             </div>
 
             {form.rodeos.map((r, i) => {
-              const cant = parseFloat(r.cantidad) || 0;
-              const pren = parseFloat(r.prenadas) || 0;
+              const s = statsRodeo(r);
               return (
                 <div key={r.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -613,12 +799,28 @@
                     {form.rodeos.length > 1 && <button onClick={() => quitarRodeo(r.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={16} /></button>}
                   </div>
                   <input placeholder="Categoría (ej: Vaquillonas)" value={r.categoria} onChange={(e) => actualizarRodeo(r.id, { categoria: e.target.value })} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <input type="number" placeholder="Cantidad" value={r.cantidad} onChange={(e) => actualizarRodeo(r.id, { cantidad: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
-                    <input type="number" placeholder="Preñadas" value={r.prenadas} onChange={(e) => actualizarRodeo(r.id, { prenadas: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    <button onClick={() => actualizarRodeo(r.id, { modoCarga: "totales" })} style={{
+                      flex: 1, padding: "7px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${r.modoCarga !== "rapida" ? T.teal : T.line}`, background: r.modoCarga !== "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                    }}>Totales</button>
+                    <button onClick={() => actualizarRodeo(r.id, { modoCarga: "rapida" })} style={{
+                      flex: 1, padding: "7px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${r.modoCarga === "rapida" ? T.teal : T.line}`, background: r.modoCarga === "rapida" ? T.tealSoft : "#fff", color: T.teal,
+                    }}>Carga rápida (por toque)</button>
                   </div>
-                  {cant > 0 && (
-                    <div style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{pct(pren, cant)}% preñez ({pren} de {cant})</div>
+
+                  {r.modoCarga === "rapida" ? (
+                    <RodeoQuickEntry rodeo={r} onChange={(patch) => actualizarRodeo(r.id, patch)} />
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                      <input type="number" placeholder="Cantidad" value={r.cantidad} onChange={(e) => actualizarRodeo(r.id, { cantidad: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                      <input type="number" placeholder="Preñadas" value={r.prenadas} onChange={(e) => actualizarRodeo(r.id, { prenadas: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    </div>
+                  )}
+                  {s.cantidad > 0 && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.gold, marginTop: 8 }}>{pct(s.prenadas, s.cantidad)}% preñez ({s.prenadas} de {s.cantidad})</div>
                   )}
                 </div>
               );
