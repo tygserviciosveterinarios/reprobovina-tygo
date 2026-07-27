@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ReproBovina T&amp;G</title>
+
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ReproBovina" />
+  <meta name="theme-color" content="#1C2B22" />
+
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    #error-box {
+      display: none; position: fixed; inset: 0; background: #fff; z-index: 9999;
+      padding: 24px; font-family: -apple-system, sans-serif; overflow: auto;
+    }
+    #error-box h2 { color: #A6491F; }
+    #error-box pre { background: #f3eedd; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.3.1/jsx-dev-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react",
+      "xlsx": "https://esm.sh/xlsx@0.18.5",
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+    }
+  }
+  </script>
+
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <div id="error-box">
+    <h2>Ocurrió un error</h2>
+    <p>Sacale una captura a esto y mandásela a Claude para corregirlo:</p>
+    <pre id="error-text"></pre>
+  </div>
+
+  <script>
+    window.addEventListener("error", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      document.getElementById("error-text").textContent =
+        (e.error && e.error.stack) || e.message || String(e);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      var r = e.reason;
+      document.getElementById("error-text").textContent = (r && (r.stack || r.message)) || String(r);
+    });
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState, useEffect } from "react";
+    import { createRoot } from "react-dom/client";
+    import { Users, Plus, X, Trash2, Pencil, Wifi, WifiOff } from "lucide-react";
+    import { initializeApp } from "firebase/app";
+    import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from "firebase/firestore";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDeBLhH4lIASyLxlMg_oSwM_EZX7wzOg94",
+      authDomain: "reprobovina-tyg.firebaseapp.com",
+      projectId: "reprobovina-tyg",
+      storageBucket: "reprobovina-tyg.firebasestorage.app",
+      messagingSenderId: "162502425864",
+      appId: "1:162502425864:web:49fecac926675a731c00bd",
+    };
+    const fbApp = initializeApp(firebaseConfig);
+    const db = getFirestore(fbApp);
+
+    const DB_NAME = "reprobovina_local";
+    const DB_VERSION = 1;
+    const COLECCIONES = ["clientes"];
+
+    function abrirDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const dbase = req.result;
+          COLECCIONES.forEach((nombre) => {
+            if (!dbase.objectStoreNames.contains(nombre)) {
+              dbase.createObjectStore(nombre, { keyPath: "id" });
+            }
+          });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbGetAll(nombreColeccion) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readonly");
+        const req = tx.objectStore(nombreColeccion).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbPut(nombreColeccion, registro) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).put(registro);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function idbDelete(nombreColeccion, id) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function getColeccion(nombreColeccion) { return idbGetAll(nombreColeccion); }
+    async function guardarEnColeccion(nombreColeccion, registro) {
+      const conFecha = { ...registro, updatedAt: Date.now() };
+      await idbPut(nombreColeccion, conFecha);
+      if (navigator.onLine) {
+        try { await setDoc(doc(db, nombreColeccion, conFecha.id), conFecha); } catch (e) {}
+      }
+      return conFecha;
+    }
+    async function borrarDeColeccion(nombreColeccion, id) {
+      await idbDelete(nombreColeccion, id);
+      if (navigator.onLine) {
+        try { await deleteDoc(doc(db, nombreColeccion, id)); } catch (e) {}
+      }
+    }
+    async function sincronizar(nombreColeccion) {
+      if (!navigator.onLine) return { ok: false };
+      try {
+        const locales = await idbGetAll(nombreColeccion);
+        const localesPorId = Object.fromEntries(locales.map((r) => [r.id, r]));
+        const snap = await getDocs(collection(db, nombreColeccion));
+        const remotos = snap.docs.map((d) => d.data());
+        const remotosPorId = Object.fromEntries(remotos.map((r) => [r.id, r]));
+        const todosLosIds = new Set([...Object.keys(localesPorId), ...Object.keys(remotosPorId)]);
+        for (const id of todosLosIds) {
+          const loc = localesPorId[id];
+          const rem = remotosPorId[id];
+          if (loc && !rem) await setDoc(doc(db, nombreColeccion, id), loc);
+          else if (rem && !loc) await idbPut(nombreColeccion, rem);
+          else if (loc && rem) {
+            if ((loc.updatedAt || 0) > (rem.updatedAt || 0)) await setDoc(doc(db, nombreColeccion, id), loc);
+            else if ((rem.updatedAt || 0) > (loc.updatedAt || 0)) await idbPut(nombreColeccion, rem);
+          }
+        }
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, motivo: e.message };
+      }
+    }
+
+    const T = {
+      paper: "#DCD3B8", ink: "#1C2B22", inkSoft: "#5A6B5E", card: "#F3EEDD",
+      line: "#C9BE9C", rust: "#A6491F", gold: "#8A6D1E", goldSoft: "#E9DCB0",
+      teal: "#1F6B6B", tealSoft: "#CFE3E1",
+    };
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+    function EstadoConexion({ estado }) {
+      const config = {
+        online: { icon: Wifi, texto: "En línea · sincronizado", color: T.teal, bg: T.tealSoft },
+        offline: { icon: WifiOff, texto: "Sin conexión · guardado en el dispositivo", color: T.rust, bg: "#E7C9B7" },
+        sincronizando: { icon: Wifi, texto: "Sincronizando...", color: T.gold, bg: T.goldSoft },
+      }[estado] || {};
+      const Icon = config.icon;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", background: config.bg, color: config.color, fontSize: 12, fontWeight: 600 }}>
+          {Icon && <Icon size={13} />} {config.texto}
+        </div>
+      );
+    }
+
+    function useCollection(nombre) {
+      const [lista, setLista] = useState([]);
+      const [estadoSync, setEstadoSync] = useState(navigator.onLine ? "sincronizando" : "offline");
+      const recargar = () => getColeccion(nombre).then(setLista);
+      useEffect(() => {
+        recargar();
+        const sync = async () => {
+          if (!navigator.onLine) { setEstadoSync("offline"); return; }
+          setEstadoSync("sincronizando");
+          await sincronizar(nombre);
+          await recargar();
+          setEstadoSync("online");
+        };
+        sync();
+        const onOnline = () => sync();
+        const onOffline = () => setEstadoSync("offline");
+        window.addEventListener("online", onOnline);
+        window.addEventListener("offline", onOffline);
+        return () => {
+          window.removeEventListener("online", onOnline);
+          window.removeEventListener("offline", onOffline);
+        };
+      }, [nombre]);
+      const guardar = async (registro) => {
+        const conId = registro.id ? registro : { ...registro, id: uid() };
+        await guardarEnColeccion(nombre, conId);
+        await recargar();
+      };
+      const borrar = async (id) => { await borrarDeColeccion(nombre, id); await recargar(); };
+      return { lista, guardar, borrar, estadoSync };
+    }
+
+    function ClientesView() {
+      const { lista: clientes, guardar, borrar, estadoSync } = useCollection("clientes");
+      const [showForm, setShowForm] = useState(false);
+      const [editingId, setEditingId] = useState(null);
+      const [nombre, setNombre] = useState("");
+      const [busqueda, setBusqueda] = useState("");
+
+      const abrirNuevo = () => { setEditingId(null); setNombre(""); setShowForm(true); };
+      const abrirEditar = (c) => { setEditingId(c.id); setNombre(c.nombre); setShowForm(true); };
+      const confirmarGuardar = () => {
+        if (!nombre.trim()) return;
+        guardar({ id: editingId || undefined, nombre: nombre.trim(), createdAt: Date.now() });
+        setShowForm(false);
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este cliente?")) borrar(id); };
+      const filtrados = clientes.filter((c) => c.nombre.toLowerCase().includes(busqueda.toLowerCase()));
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ display: "flex", justifyContent: "center", padding: "20px 16px 4px" }}>
+            <div style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: 22, color: T.ink }}>T&amp;G Servicios Veterinarios</div>
+          </div>
+          <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Clientes</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>{clientes.length} registrados</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px" }}>
+            <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 15, marginBottom: 14, background: "#fff" }} />
+            {showForm && (
+              <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+                <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Nombre del cliente</label>
+                <input autoFocus value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Agrobari S.A." style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={confirmarGuardar} style={{ flex: 1, background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "10px", fontWeight: 700, cursor: "pointer" }}>Guardar</button>
+                  <button onClick={() => setShowForm(false)} style={{ background: "none", border: `1.5px solid ${T.line}`, borderRadius: 8, padding: "10px 14px", cursor: "pointer" }}><X size={16} /></button>
+                </div>
+              </div>
+            )}
+            {filtrados.length === 0 && !showForm && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Users size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay clientes cargados. Tocá "Nuevo" para agregar el primero.</div>
+              </div>
+            )}
+            {filtrados.map((c) => (
+              <div key={c.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontFamily: "Georgia, serif", fontWeight: 700, fontSize: 17, color: T.ink }}>{c.nombre}</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => abrirEditar(c)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                  <button onClick={() => eliminar(c.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      return (
+        <div style={{ fontFamily: "Helvetica, Arial, sans-serif", background: T.paper, minHeight: "100vh", maxWidth: 480, margin: "0 auto", color: T.ink }}>
+          <ClientesView />
+          <div style={{ padding: "30px 16px", textAlign: "center", fontSize: 12, color: T.inkSoft }}>
+            Versión de prueba — solo Clientes por ahora. El resto de los módulos se agregan en la próxima etapa.
+          </div>
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
