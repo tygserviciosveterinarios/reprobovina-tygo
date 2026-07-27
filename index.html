@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ReproBovina T&amp;G</title>
+
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ReproBovina" />
+  <meta name="theme-color" content="#1C2B22" />
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Inter', -apple-system, sans-serif; }
+    #error-box {
+      display: none; position: fixed; inset: 0; background: #fff; z-index: 9999;
+      padding: 24px; font-family: -apple-system, sans-serif; overflow: auto;
+    }
+    #error-box h2 { color: #A6491F; }
+    #error-box pre { background: #f3eedd; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.3.1/jsx-dev-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react",
+      "xlsx": "https://esm.sh/xlsx@0.18.5",
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+    }
+  }
+  </script>
+
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <div id="error-box">
+    <h2>Ocurrió un error</h2>
+    <p>Sacale una captura a esto y mandásela a Claude para corregirlo:</p>
+    <pre id="error-text"></pre>
+  </div>
+
+  <script>
+    window.addEventListener("error", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      document.getElementById("error-text").textContent =
+        (e.error && e.error.stack) || e.message || String(e);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      document.getElementById("error-box").style.display = "block";
+      var r = e.reason;
+      document.getElementById("error-text").textContent = (r && (r.stack || r.message)) || String(r);
+    });
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState, useEffect } from "react";
+    import { createRoot } from "react-dom/client";
+    import { Users, Plus, X, Trash2, Pencil, Wifi, WifiOff, ListChecks, Stethoscope, Syringe, ClipboardCheck, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+    import { initializeApp } from "firebase/app";
+    import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from "firebase/firestore";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDeBLhH4lIASyLxlMg_oSwM_EZX7wzOg94",
+      authDomain: "reprobovina-tyg.firebaseapp.com",
+      projectId: "reprobovina-tyg",
+      storageBucket: "reprobovina-tyg.firebasestorage.app",
+      messagingSenderId: "162502425864",
+      appId: "1:162502425864:web:49fecac926675a731c00bd",
+    };
+    const fbApp = initializeApp(firebaseConfig);
+    const db = getFirestore(fbApp);
+
+    const DB_NAME = "reprobovina_local";
+    const DB_VERSION = 5;
+    const COLECCIONES = ["clientes", "preservicios", "gestaciones", "iatfs", "andrologicos"];
+
+    function abrirDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const dbase = req.result;
+          COLECCIONES.forEach((nombre) => {
+            if (!dbase.objectStoreNames.contains(nombre)) {
+              dbase.createObjectStore(nombre, { keyPath: "id" });
+            }
+          });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbGetAll(nombreColeccion) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readonly");
+        const req = tx.objectStore(nombreColeccion).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function idbPut(nombreColeccion, registro) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).put(registro);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function idbDelete(nombreColeccion, id) {
+      const dbase = await abrirDB();
+      return new Promise((resolve, reject) => {
+        const tx = dbase.transaction(nombreColeccion, "readwrite");
+        tx.objectStore(nombreColeccion).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function getColeccion(nombreColeccion) { return idbGetAll(nombreColeccion); }
+    async function guardarEnColeccion(nombreColeccion, registro) {
+      const conFecha = { ...registro, updatedAt: Date.now() };
+      await idbPut(nombreColeccion, conFecha);
+      if (navigator.onLine) {
+        try { await setDoc(doc(db, nombreColeccion, conFecha.id), conFecha); } catch (e) {}
+      }
+      return conFecha;
+    }
+    async function borrarDeColeccion(nombreColeccion, id) {
+      await idbDelete(nombreColeccion, id);
+      if (navigator.onLine) {
+        try { await deleteDoc(doc(db, nombreColeccion, id)); } catch (e) {}
+      }
+    }
+    async function sincronizar(nombreColeccion) {
+      if (!navigator.onLine) return { ok: false };
+      try {
+        const locales = await idbGetAll(nombreColeccion);
+        const localesPorId = Object.fromEntries(locales.map((r) => [r.id, r]));
+        const snap = await getDocs(collection(db, nombreColeccion));
+        const remotos = snap.docs.map((d) => d.data());
+        const remotosPorId = Object.fromEntries(remotos.map((r) => [r.id, r]));
+        const todosLosIds = new Set([...Object.keys(localesPorId), ...Object.keys(remotosPorId)]);
+        for (const id of todosLosIds) {
+          const loc = localesPorId[id];
+          const rem = remotosPorId[id];
+          if (loc && !rem) await setDoc(doc(db, nombreColeccion, id), loc);
+          else if (rem && !loc) await idbPut(nombreColeccion, rem);
+          else if (loc && rem) {
+            if ((loc.updatedAt || 0) > (rem.updatedAt || 0)) await setDoc(doc(db, nombreColeccion, id), loc);
+            else if ((rem.updatedAt || 0) > (loc.updatedAt || 0)) await idbPut(nombreColeccion, rem);
+          }
+        }
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, motivo: e.message };
+      }
+    }
+
+    const T = {
+      paper: "#DCD3B8", ink: "#1C2B22", inkSoft: "#5A6B5E", card: "#F3EEDD",
+      line: "#C9BE9C", rust: "#A6491F", gold: "#8A6D1E", goldSoft: "#E9DCB0",
+      teal: "#1F6B6B", tealSoft: "#CFE3E1",
+    };
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+    function EstadoConexion({ estado }) {
+      const config = {
+        online: { icon: Wifi, texto: "En línea · sincronizado", color: T.teal, bg: T.tealSoft },
+        offline: { icon: WifiOff, texto: "Sin conexión · guardado en el dispositivo", color: T.rust, bg: "#E7C9B7" },
+        sincronizando: { icon: Wifi, texto: "Sincronizando...", color: T.gold, bg: T.goldSoft },
+      }[estado] || {};
+      const Icon = config.icon;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", background: config.bg, color: config.color, fontSize: 12, fontWeight: 600 }}>
+          {Icon && <Icon size={13} />} {config.texto}
+        </div>
+      );
+    }
+
+    function useCollection(nombre) {
+      const [lista, setLista] = useState([]);
+      const [estadoSync, setEstadoSync] = useState(navigator.onLine ? "sincronizando" : "offline");
+      const recargar = () => getColeccion(nombre).then(setLista);
+      useEffect(() => {
+        recargar();
+        const sync = async () => {
+          if (!navigator.onLine) { setEstadoSync("offline"); return; }
+          setEstadoSync("sincronizando");
+          await sincronizar(nombre);
+          await recargar();
+          setEstadoSync("online");
+        };
+        sync();
+        const onOnline = () => sync();
+        const onOffline = () => setEstadoSync("offline");
+        window.addEventListener("online", onOnline);
+        window.addEventListener("offline", onOffline);
+        return () => {
+          window.removeEventListener("online", onOnline);
+          window.removeEventListener("offline", onOffline);
+        };
+      }, [nombre]);
+      const guardar = async (registro) => {
+        const conId = registro.id ? registro : { ...registro, id: uid() };
+        await guardarEnColeccion(nombre, conId);
+        await recargar();
+      };
+      const borrar = async (id) => { await borrarDeColeccion(nombre, id); await recargar(); };
+      return { lista, guardar, borrar, estadoSync };
+    }
+
+    function pct(parte, total) {
+      if (!total) return 0;
+      return Math.round((parte / total) * 1000) / 10;
+    }
+    function nuevoEstablecimiento() { return { id: uid(), nombre: "", ubicacion: "" }; }
+
+    function ClientesView({ clientes, guardar, borrar, estadoSync, onSeleccionar }) {
+      const [showForm, setShowForm] = useState(false);
+      const [editingId, setEditingId] = useState(null);
+      const [nombre, setNombre] = useState("");
+      const [establecimientos, setEstablecimientos] = useState([nuevoEstablecimiento()]);
+      const [busqueda, setBusqueda] = useState("");
+
+      const abrirNuevo = () => { setEditingId(null); setNombre(""); setEstablecimientos([nuevoEstablecimiento()]); setShowForm(true); };
+      const abrirEditar = (c) => {
+        setEditingId(c.id); setNombre(c.nombre);
+        setEstablecimientos(c.establecimientos && c.establecimientos.length ? c.establecimientos : [nuevoEstablecimiento()]);
+        setShowForm(true);
+      };
+      const confirmarGuardar = () => {
+        if (!nombre.trim()) return;
+        const est = establecimientos.filter((e) => e.nombre.trim());
+        guardar({ id: editingId || undefined, nombre: nombre.trim(), establecimientos: est, createdAt: Date.now() });
+        setShowForm(false);
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este cliente?")) borrar(id); };
+      const filtrados = clientes.filter((c) => c.nombre.toLowerCase().includes(busqueda.toLowerCase()));
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ display: "flex", justifyContent: "center", padding: "20px 16px 4px" }}>
+            <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 22, color: T.ink }}>T&amp;G Servicios Veterinarios</div>
+          </div>
+          <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Clientes</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>{clientes.length} registrados</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 15, marginBottom: 14, background: "#fff" }} />
+            {showForm && (
+              <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+                <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Nombre del cliente</label>
+                <input autoFocus value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Agrobari S.A." style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimientos</label>
+                {establecimientos.map((e, i) => (
+                  <div key={e.id} style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <input value={e.nombre} onChange={(ev) => setEstablecimientos(establecimientos.map((x) => x.id === e.id ? { ...x, nombre: ev.target.value } : x))}
+                      placeholder="Nombre del campo" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input value={e.ubicacion} onChange={(ev) => setEstablecimientos(establecimientos.map((x) => x.id === e.id ? { ...x, ubicacion: ev.target.value } : x))}
+                      placeholder="Ubicación (opcional)" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    {establecimientos.length > 1 && (
+                      <button onClick={() => setEstablecimientos(establecimientos.filter((x) => x.id !== e.id))} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><X size={16} /></button>
+                    )}
+                  </div>
+                ))}
+                <button onClick={() => setEstablecimientos([...establecimientos, nuevoEstablecimiento()])} style={{ background: "none", border: "none", color: T.teal, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "8px 0", display: "flex", alignItems: "center", gap: 4 }}>
+                  <Plus size={14} /> Agregar establecimiento
+                </button>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={confirmarGuardar} style={{ flex: 1, background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "10px", fontWeight: 700, cursor: "pointer" }}>Guardar</button>
+                  <button onClick={() => setShowForm(false)} style={{ background: "none", border: `1.5px solid ${T.line}`, borderRadius: 8, padding: "10px 14px", cursor: "pointer" }}><X size={16} /></button>
+                </div>
+              </div>
+            )}
+            {filtrados.length === 0 && !showForm && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Users size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay clientes cargados. Tocá "Nuevo" para agregar el primero.</div>
+              </div>
+            )}
+            {filtrados.map((c) => (
+              <div key={c.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }} onClick={() => onSeleccionar(c)}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 17, color: T.ink }}>{c.nombre}</div>
+                    {(c.establecimientos || []).length > 0 && (
+                      <div style={{ fontSize: 13, color: T.inkSoft, marginTop: 3 }}>
+                        {c.establecimientos.map((e) => e.ubicacion ? `${e.nombre} (${e.ubicacion})` : e.nombre).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }} onClick={(ev) => ev.stopPropagation()}>
+                    <button onClick={() => abrirEditar(c)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                    <button onClick={() => eliminar(c.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function PreservicioView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista"); // lista | form
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        revisadas: "", aptas: "",
+        descPelvimetria: "", descGdr: "", descTamano: "", descOtras: "",
+        observaciones: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const revisadas = parseFloat(form.revisadas) || 0;
+      const aptas = parseFloat(form.aptas) || 0;
+      const descarte = Math.max(0, revisadas - aptas);
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Revisadas</label>
+                  <input type="number" value={form.revisadas} onChange={(e) => setForm({ ...form, revisadas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Aptas</label>
+                  <input type="number" value={form.aptas} onChange={(e) => setForm({ ...form, aptas: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+                </div>
+              </div>
+
+              {revisadas > 0 && (
+                <div style={{ background: T.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 12, display: "flex", justifyContent: "space-around", textAlign: "center" }}>
+                  <div><div style={{ fontSize: 11, color: T.gold, fontWeight: 700 }}>APTAS</div><div style={{ fontWeight: 700, fontSize: 18 }}>{pct(aptas, revisadas)}%</div></div>
+                  <div><div style={{ fontSize: 11, color: T.rust, fontWeight: 700 }}>DESCARTE</div><div style={{ fontWeight: 700, fontSize: 18 }}>{pct(descarte, revisadas)}%</div></div>
+                </div>
+              )}
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Motivos de descarte (opcional)</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, margin: "6px 0 12px" }}>
+                <input type="number" placeholder="Pelvimetría" value={form.descPelvimetria} onChange={(e) => setForm({ ...form, descPelvimetria: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                <input type="number" placeholder="GDR" value={form.descGdr} onChange={(e) => setForm({ ...form, descGdr: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                <input type="number" placeholder="Tamaño" value={form.descTamano} onChange={(e) => setForm({ ...form, descTamano: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                <input type="number" placeholder="Otras" value={form.descOtras} onChange={(e) => setForm({ ...form, descOtras: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+              </div>
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Observaciones</label>
+              <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff", minHeight: 70 }} />
+
+              <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Preservicio</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <ListChecks size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de preservicio para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
+              const rev = parseFloat(inf.revisadas) || 0;
+              const apt = parseFloat(inf.aptas) || 0;
+              return (
+                <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 16, color: T.ink }}>{inf.establecimiento}</div>
+                      <div style={{ fontSize: 12.5, color: T.inkSoft }}>{inf.fecha}</div>
+                      {rev > 0 && <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, marginTop: 4 }}>{apt}/{rev} aptas ({pct(apt, rev)}%)</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function nuevoRodeo() { return { id: uid(), categoria: "", cantidad: "", prenadas: "", observaciones: "" }; }
+
+    function GestacionView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        metodo: "Tacto rectal",
+        rodeos: [nuevoRodeo()],
+        conclusion: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarRodeo = (id, patch) => setForm({ ...form, rodeos: form.rodeos.map((r) => r.id === id ? { ...r, ...patch } : r) });
+      const agregarRodeo = () => setForm({ ...form, rodeos: [...form.rodeos, nuevoRodeo()] });
+      const quitarRodeo = (id) => setForm({ ...form, rodeos: form.rodeos.filter((r) => r.id !== id) });
+
+      const totalesInforme = (inf) => (inf.rodeos || []).reduce((acc, r) => {
+        acc.cantidad += parseFloat(r.cantidad) || 0;
+        acc.prenadas += parseFloat(r.prenadas) || 0;
+        return acc;
+      }, { cantidad: 0, prenadas: 0 });
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+              )}
+
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Método</label>
+              <select value={form.metodo} onChange={(e) => setForm({ ...form, metodo: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }}>
+                <option>Tacto rectal</option>
+                <option>Ecografía</option>
+              </select>
+            </div>
+
+            {form.rodeos.map((r, i) => {
+              const cant = parseFloat(r.cantidad) || 0;
+              const pren = parseFloat(r.prenadas) || 0;
+              return (
+                <div key={r.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: T.ink }}>Rodeo {i + 1}</div>
+                    {form.rodeos.length > 1 && <button onClick={() => quitarRodeo(r.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={16} /></button>}
+                  </div>
+                  <input placeholder="Categoría (ej: Vaquillonas)" value={r.categoria} onChange={(e) => actualizarRodeo(r.id, { categoria: e.target.value })} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <input type="number" placeholder="Cantidad" value={r.cantidad} onChange={(e) => actualizarRodeo(r.id, { cantidad: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    <input type="number" placeholder="Preñadas" value={r.prenadas} onChange={(e) => actualizarRodeo(r.id, { prenadas: e.target.value })} style={{ padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                  </div>
+                  {cant > 0 && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{pct(pren, cant)}% preñez ({pren} de {cant})</div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={agregarRodeo} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={14} /> Agregar rodeo
+            </button>
+
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Conclusión / observaciones</label>
+              <textarea value={form.conclusion} onChange={(e) => setForm({ ...form, conclusion: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff", minHeight: 70 }} />
+            </div>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Diagnóstico de Gestación</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Stethoscope size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de gestación para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => {
+              const t = totalesInforme(inf);
+              return (
+                <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 16, color: T.ink }}>{inf.establecimiento}</div>
+                      <div style={{ fontSize: 12.5, color: T.inkSoft }}>{inf.fecha} · {inf.metodo}</div>
+                      {t.cantidad > 0 && <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, marginTop: 4 }}>{pct(t.prenadas, t.cantidad)}% preñez · {t.cantidad} cabezas</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                      <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function nuevoLote() {
+      return {
+        id: uid(), nombre: "", cantidad: "", toros: "",
+        fechaColocacion: "", fechaRetiro: "", fechaIATF: "",
+        perdidasDispositivo: "", noRespondieron: "",
+      };
+    }
+
+    function IatfView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        protocolos: [nuevoLote()],
+        observacionesGen: "",
+      });
+      const [form, setForm] = useState(vacio());
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { setEditando(null); setForm(vacio()); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarLote = (id, patch) => setForm({ ...form, protocolos: form.protocolos.map((p) => p.id === id ? { ...p, ...patch } : p) });
+      const agregarLote = () => setForm({ ...form, protocolos: [...form.protocolos, nuevoLote()] });
+      const quitarLote = (id) => setForm({ ...form, protocolos: form.protocolos.filter((p) => p.id !== id) });
+
+      const statsLote = (p) => {
+        const cant = parseFloat(p.cantidad) || 0;
+        const noResp = parseFloat(p.noRespondieron) || 0;
+        const perd = parseFloat(p.perdidasDispositivo) || 0;
+        return { cant, respondieron: Math.max(0, cant - noResp), perd, pctResp: pct(cant - noResp, cant), pctPerd: pct(perd, cant) };
+      };
+      const totalesInforme = (inf) => (inf.protocolos || []).reduce((a, p) => a + (parseFloat(p.cantidad) || 0), 0);
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff" }} />
+              )}
+            </div>
+
+            {form.protocolos.map((p, i) => {
+              const s = statsLote(p);
+              return (
+                <div key={p.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: T.ink }}>Lote {i + 1}</div>
+                    {form.protocolos.length > 1 && <button onClick={() => quitarLote(p.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={16} /></button>}
+                  </div>
+                  <input placeholder="Nombre del lote" value={p.nombre} onChange={(e) => actualizarLote(p.id, { nombre: e.target.value })} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+                  <input placeholder="Toro/s utilizados" value={p.toros} onChange={(e) => actualizarLote(p.id, { toros: e.target.value })} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 8, background: "#fff" }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>Colocación</label>
+                      <input type="date" value={p.fechaColocacion} onChange={(e) => actualizarLote(p.id, { fechaColocacion: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 12.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>Retiro</label>
+                      <input type="date" value={p.fechaRetiro} onChange={(e) => actualizarLote(p.id, { fechaRetiro: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 12.5, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>IATF</label>
+                      <input type="date" value={p.fechaIATF} onChange={(e) => actualizarLote(p.id, { fechaIATF: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 12.5, background: "#fff" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>Cantidad</label>
+                      <input type="number" value={p.cantidad} onChange={(e) => actualizarLote(p.id, { cantidad: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>Perd. dispositivo</label>
+                      <input type="number" value={p.perdidasDispositivo} onChange={(e) => actualizarLote(p.id, { perdidasDispositivo: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: T.inkSoft }}>No respondieron</label>
+                      <input type="number" value={p.noRespondieron} onChange={(e) => actualizarLote(p.id, { noRespondieron: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} />
+                    </div>
+                  </div>
+                  {s.cant > 0 && (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.teal }}>{s.pctResp}% respuesta · {s.pctPerd}% pérdida dispositivo</div>
+                  )}
+                </div>
+              );
+            })}
+            <button onClick={agregarLote} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={14} /> Agregar lote
+            </button>
+
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Observaciones generales</label>
+              <textarea value={form.observacionesGen} onChange={(e) => setForm({ ...form, observacionesGen: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff", minHeight: 70 }} />
+            </div>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Inseminación Artificial</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <Syringe size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay informes de IATF para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => (
+              <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 16, color: T.ink }}>{inf.establecimiento}</div>
+                    <div style={{ fontSize: 12.5, color: T.inkSoft }}>{inf.fecha}</div>
+                    <div style={{ fontSize: 13, color: T.teal, fontWeight: 700, marginTop: 4 }}>{totalesInforme(inf)} inseminadas</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                    <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    const ESTADOS_TORO = [
+      { v: "apto", label: "Apto", color: T.gold, bg: T.goldSoft },
+      { v: "tratamiento", label: "A tratamiento", color: T.teal, bg: T.tealSoft },
+      { v: "descarte", label: "Descarte", color: T.rust, bg: "#E7C9B7" },
+    ];
+    function nuevoToro() {
+      return {
+        id: uid(), tubo: "", rp: "", electronica: "", raza: "", origen: "", rodeo: "",
+        ce: "", tono: "", cc: "", estado: "apto", motivoDescarte: "", observaciones: "",
+      };
+    }
+
+    function TarjetaToro({ t, idx, expandido, onExpandir, onActualizar, onQuitar, sePuedeQuitar }) {
+      const est = ESTADOS_TORO.find((e) => e.v === t.estado);
+      if (!expandido) {
+        return (
+          <div onClick={onExpandir} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 12, padding: 12, marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, color: T.ink }}>#{t.tubo || idx + 1} · RP {t.rp || "-"}</div>
+              <div style={{ fontSize: 12, color: T.inkSoft }}>{t.raza}{t.ce ? ` · CE ${t.ce} cm` : ""}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {est && <span style={{ background: est.bg, color: est.color, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20 }}>{est.label}</span>}
+              <ChevronDown size={18} style={{ color: T.inkSoft }} />
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
+          <div onClick={onExpandir} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, cursor: "pointer" }}>
+            <div style={{ fontWeight: 700, color: T.ink }}>Toro {idx + 1}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {sePuedeQuitar && <button onClick={(e) => { e.stopPropagation(); onQuitar(); }} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={16} /></button>}
+              <ChevronUp size={18} style={{ color: T.inkSoft }} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>N° Tubo</label>
+              <input value={t.tubo} onChange={(e) => onActualizar({ tubo: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>RP</label>
+              <input value={t.rp} onChange={(e) => onActualizar({ rp: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+          </div>
+          <div style={{ marginBottom: 8 }}><label style={{ fontSize: 11, color: T.inkSoft }}>Electrónica (caravana)</label>
+            <input value={t.electronica} onChange={(e) => onActualizar({ electronica: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>Raza</label>
+              <input value={t.raza} onChange={(e) => onActualizar({ raza: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>Origen</label>
+              <input value={t.origen} onChange={(e) => onActualizar({ origen: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>C.E. (cm)</label>
+              <input value={t.ce} onChange={(e) => onActualizar({ ce: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>Tono</label>
+              <input value={t.tono} onChange={(e) => onActualizar({ tono: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+            <div><label style={{ fontSize: 11, color: T.inkSoft }}>C.C.</label>
+              <input value={t.cc} onChange={(e) => onActualizar({ cc: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+          </div>
+          <label style={{ fontSize: 11, color: T.inkSoft }}>Estado</label>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {ESTADOS_TORO.map((e) => (
+              <button key={e.v} onClick={() => onActualizar({ estado: e.v })} style={{
+                flex: 1, padding: "8px 4px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                border: `1.5px solid ${t.estado === e.v ? e.color : T.line}`, background: t.estado === e.v ? e.bg : "#fff", color: e.color,
+              }}>{e.label}</button>
+            ))}
+          </div>
+          {t.estado === "descarte" && (
+            <div style={{ marginBottom: 8 }}><label style={{ fontSize: 11, color: T.inkSoft }}>Motivo de descarte</label>
+              <input value={t.motivoDescarte} onChange={(e) => onActualizar({ motivoDescarte: e.target.value })} placeholder="Ej: Atrofia testicular" style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff" }} /></div>
+          )}
+          <label style={{ fontSize: 11, color: T.inkSoft }}>Observaciones</label>
+          <textarea value={t.observaciones} onChange={(e) => onActualizar({ observaciones: e.target.value })} style={{ width: "100%", padding: "6px 8px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 14, background: "#fff", minHeight: 50 }} />
+        </div>
+      );
+    }
+
+    function AndrologicoView({ cliente, informes, guardar, borrar, estadoSync }) {
+      const [vista, setVista] = useState("lista");
+      const [editando, setEditando] = useState(null);
+      const vacio = () => ({
+        fecha: new Date().toISOString().slice(0, 10),
+        establecimiento: (cliente.establecimientos && cliente.establecimientos[0] && cliente.establecimientos[0].nombre) || "",
+        toros: [nuevoToro()],
+      });
+      const [form, setForm] = useState(vacio());
+      const [expandidoId, setExpandidoId] = useState(null);
+
+      const propios = informes.filter((i) => i.clienteId === cliente.id);
+      const abrirNuevo = () => { const v = vacio(); setEditando(null); setForm(v); setExpandidoId(v.toros[0].id); setVista("form"); };
+      const abrirEditar = (inf) => { setEditando(inf.id); setForm(inf); setExpandidoId(null); setVista("form"); };
+      const confirmarGuardar = () => {
+        guardar({ ...form, id: editando || undefined, clienteId: cliente.id });
+        setVista("lista");
+      };
+      const eliminar = (id) => { if (window.confirm("¿Eliminar este informe?")) borrar(id); };
+
+      const actualizarToro = (id, patch) => setForm({ ...form, toros: form.toros.map((t) => t.id === id ? { ...t, ...patch } : t) });
+      const agregarToro = () => { const nuevo = nuevoToro(); setForm({ ...form, toros: [...form.toros, nuevo] }); setExpandidoId(nuevo.id); };
+      const quitarToro = (id) => setForm({ ...form, toros: form.toros.filter((t) => t.id !== id) });
+
+      const resumen = (inf) => {
+        const toros = inf.toros || [];
+        const aptos = toros.filter((t) => t.estado === "apto").length;
+        return `${aptos}/${toros.length} aptos`;
+      };
+
+      if (vista === "form") {
+        return (
+          <div style={{ padding: "16px 16px 90px" }}>
+            <button onClick={() => setVista("lista")} style={{ background: "none", border: "none", color: T.teal, marginBottom: 10, cursor: "pointer", fontWeight: 700 }}>&larr; Volver</button>
+            <div style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 12px", background: "#fff" }} />
+              <label style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Establecimiento</label>
+              {(cliente.establecimientos || []).length > 0 ? (
+                <select value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff" }}>
+                  {cliente.establecimientos.map((e) => <option key={e.id} value={e.nombre}>{e.nombre}</option>)}
+                </select>
+              ) : (
+                <input value={form.establecimiento} onChange={(e) => setForm({ ...form, establecimiento: e.target.value })} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 15, margin: "6px 0 0", background: "#fff" }} />
+              )}
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, textTransform: "uppercase", marginBottom: 8 }}>Toros examinados</div>
+            {form.toros.map((t, i) => (
+              <TarjetaToro key={t.id} t={t} idx={i} expandido={expandidoId === t.id}
+                onExpandir={() => setExpandidoId(expandidoId === t.id ? null : t.id)}
+                onActualizar={(patch) => actualizarToro(t.id, patch)}
+                onQuitar={() => quitarToro(t.id)} sePuedeQuitar={form.toros.length > 1} />
+            ))}
+            <button onClick={agregarToro} style={{ background: "none", border: `1.5px dashed ${T.line}`, borderRadius: 10, padding: "10px", width: "100%", color: T.teal, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+              <Plus size={14} /> Agregar toro
+            </button>
+
+            <button onClick={confirmarGuardar} style={{ width: "100%", background: T.ink, color: T.paper, border: "none", borderRadius: 8, padding: "12px", fontWeight: 700, cursor: "pointer" }}>Guardar informe</button>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <EstadoConexion estado={estadoSync} />
+          <div style={{ padding: "16px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 19, color: T.ink }}>Examen Andrológico</div>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cliente: {cliente.nombre}</div>
+            </div>
+            <button onClick={abrirNuevo} style={{ background: T.ink, color: T.paper, border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <Plus size={17} /> Nuevo
+            </button>
+          </div>
+          <div style={{ padding: "0 16px 90px" }}>
+            {propios.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 20px", color: T.inkSoft }}>
+                <ClipboardCheck size={34} style={{ opacity: 0.4, marginBottom: 10 }} />
+                <div>Todavía no hay exámenes andrológicos para este cliente.</div>
+              </div>
+            )}
+            {[...propios].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map((inf) => (
+              <div key={inf.id} style={{ background: T.card, border: `1.5px solid ${T.line}`, borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: 16, color: T.ink }}>{inf.establecimiento}</div>
+                    <div style={{ fontSize: 12.5, color: T.inkSoft }}>{inf.fecha}</div>
+                    <div style={{ fontSize: 13, color: T.gold, fontWeight: 700, marginTop: 4 }}>{resumen(inf)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => abrirEditar(inf)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer" }}><Pencil size={16} /></button>
+                    <button onClick={() => eliminar(inf.id)} style={{ background: "none", border: "none", color: T.rust, cursor: "pointer" }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function BarraNav({ tab, setTab }) {
+      const tabs = [
+        { k: "clientes", label: "Clientes", icon: Users, activo: true },
+        { k: "preservicio", label: "Preservicio", icon: ListChecks, activo: true },
+        { k: "gestacion", label: "Gestación", icon: Stethoscope, activo: true },
+        { k: "iatf", label: "IATF", icon: Syringe, activo: true },
+        { k: "andrologico", label: "Andrológico", icon: ClipboardCheck, activo: true },
+      ];
+      return (
+        <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 900, background: T.card, borderTop: `1.5px solid ${T.line}`, display: "flex", padding: "8px 4px" }}>
+          {tabs.map(({ k, label, icon: Icon, activo }) => (
+            <button key={k} disabled={!activo} onClick={() => activo && setTab(k)} style={{
+              flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+              padding: "6px 2px", color: !activo ? "#B8AF95" : (tab === k ? T.rust : T.inkSoft), cursor: activo ? "pointer" : "default",
+            }}>
+              <Icon size={19} />
+              <span style={{ fontSize: 10 }}>{activo ? label : label + " (pronto)"}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function App() {
+      const { lista: clientes, guardar: guardarCliente, borrar: borrarCliente, estadoSync: syncClientes } = useCollection("clientes");
+      const { lista: preservicios, guardar: guardarPreservicio, borrar: borrarPreservicio, estadoSync: syncPreservicio } = useCollection("preservicios");
+      const { lista: gestaciones, guardar: guardarGestacion, borrar: borrarGestacion, estadoSync: syncGestacion } = useCollection("gestaciones");
+      const { lista: iatfs, guardar: guardarIatf, borrar: borrarIatf, estadoSync: syncIatf } = useCollection("iatfs");
+      const { lista: andrologicos, guardar: guardarAndrologico, borrar: borrarAndrologico, estadoSync: syncAndrologico } = useCollection("andrologicos");
+      const [tab, setTab] = useState("clientes");
+      const [clienteId, setClienteId] = useState(null);
+      const clienteActivo = clientes.find((c) => c.id === clienteId) || null;
+
+      const irACliente = (c) => { setClienteId(c.id); setTab("preservicio"); };
+
+      return (
+        <div style={{ fontFamily: "Inter, sans-serif", background: T.paper, minHeight: "100vh", maxWidth: 900, margin: "0 auto", color: T.ink }}>
+          {tab === "clientes" && (
+            <ClientesView clientes={clientes} guardar={guardarCliente} borrar={borrarCliente} estadoSync={syncClientes} onSeleccionar={irACliente} />
+          )}
+          {tab === "preservicio" && (
+            clienteActivo ? (
+              <PreservicioView cliente={clienteActivo} informes={preservicios} guardar={guardarPreservicio} borrar={borrarPreservicio} estadoSync={syncPreservicio} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "gestacion" && (
+            clienteActivo ? (
+              <GestacionView cliente={clienteActivo} informes={gestaciones} guardar={guardarGestacion} borrar={borrarGestacion} estadoSync={syncGestacion} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "iatf" && (
+            clienteActivo ? (
+              <IatfView cliente={clienteActivo} informes={iatfs} guardar={guardarIatf} borrar={borrarIatf} estadoSync={syncIatf} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          {tab === "andrologico" && (
+            clienteActivo ? (
+              <AndrologicoView cliente={clienteActivo} informes={andrologicos} guardar={guardarAndrologico} borrar={borrarAndrologico} estadoSync={syncAndrologico} />
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: T.inkSoft }}>
+                Elegí un cliente primero desde la pestaña Clientes.
+              </div>
+            )
+          )}
+          <BarraNav tab={tab} setTab={setTab} />
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
