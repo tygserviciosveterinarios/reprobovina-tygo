@@ -280,6 +280,19 @@
     }
     function _tocarTono(ctx, kind) {
       const now = ctx.currentTime;
+      if (kind === "alerta") {
+        [0, 0.13].forEach((offset) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type = "square";
+          osc.frequency.setValueAtTime(440, now + offset);
+          gain.gain.setValueAtTime(0.13, now + offset);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.1);
+          osc.start(now + offset); osc.stop(now + offset + 0.11);
+        });
+        return;
+      }
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(ctx.destination);
@@ -299,7 +312,7 @@
         osc.start(now); osc.stop(now + 0.15);
       }
     }
-    /* kind: "positivo" (preñada/apta) o "negativo" (vacía/descarte) */
+    /* kind: "positivo" (preñada/apta), "negativo" (vacía/descarte) o "alerta" (duplicado/aviso) */
     function playBeep(kind) {
       try {
         if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1765,9 +1778,22 @@
       const [pendiente, setPendiente] = useState(null); // null | "apta" | "descarte"
       const [editandoId, setEditandoId] = useState(null);
       const [busqueda, setBusqueda] = useState("");
+      const [duplicadoConfirmado, setDuplicadoConfirmado] = useState(false);
       const electronicaRef = useRef(null);
+      const ultimoAlertadoRef = useRef(null);
       const animales = form.animales || [];
-      const limpiarCampos = () => { setRp(""); setElectronica(""); setCc(""); setRaza(""); setPendiente(null); setEditandoId(null); };
+      const rpT = rp.trim(), electronicaT = electronica.trim();
+      const duplicado = (rpT || electronicaT)
+        ? animales.find((a) => a.id !== editandoId && ((rpT && a.rp === rpT) || (electronicaT && a.electronica === electronicaT)))
+        : null;
+      useEffect(() => {
+        if (duplicado && duplicado.id !== ultimoAlertadoRef.current) {
+          playBeep("alerta");
+          ultimoAlertadoRef.current = duplicado.id;
+        }
+        if (!duplicado) ultimoAlertadoRef.current = null;
+      }, [duplicado && duplicado.id]);
+      const limpiarCampos = () => { setRp(""); setElectronica(""); setCc(""); setRaza(""); setPendiente(null); setEditandoId(null); setDuplicadoConfirmado(false); };
       const agregar = (resultado, extra) => {
         const datos = {
           rp: rp.trim(), electronica: electronica.trim(), cc: cc.trim(), raza,
@@ -1785,7 +1811,7 @@
       const borrar = (id) => { onChange({ animales: animales.filter((a) => a.id !== id) }); if (editandoId === id) limpiarCampos(); };
       const editar = (a) => {
         setRp(a.rp || ""); setElectronica(a.electronica || ""); setCc(a.cc || ""); setRaza(a.raza || "");
-        setEditandoId(a.id); setPendiente(a.resultado === "Apta" ? "apta" : "descarte");
+        setEditandoId(a.id); setPendiente(a.resultado === "Apta" ? "apta" : "descarte"); setDuplicadoConfirmado(false);
       };
       const aptas = animales.filter((a) => a.resultado === "Apta").length;
       const descartes = animales.length - aptas;
@@ -1793,6 +1819,7 @@
       const animalesFiltrados = q
         ? animales.filter((a) => (a.rp || "").toLowerCase().includes(q) || (a.electronica || "").toLowerCase().includes(q))
         : animales;
+      const bloqueadoPorDuplicado = duplicado && !editandoId && !duplicadoConfirmado;
       return (
         <div>
           {editandoId && (
@@ -1801,12 +1828,26 @@
               <button onClick={limpiarCampos} style={{ background: "none", border: "none", color: T.teal, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Cancelar</button>
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: duplicado ? 4 : 8 }}>
             <div><label style={{ fontSize: 13, color: T.inkSoft }}>RP</label>
-              <input value={rp} onChange={(e) => setRp(e.target.value)} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+              <input value={rp} onChange={(e) => { setRp(e.target.value); setDuplicadoConfirmado(false); }} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${duplicado ? T.rust : T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
             <div><label style={{ fontSize: 13, color: T.inkSoft }}>Caravana electrónica</label>
-              <input ref={electronicaRef} value={electronica} onChange={(e) => setElectronica(e.target.value)} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
+              <input ref={electronicaRef} value={electronica} onChange={(e) => { setElectronica(e.target.value); setDuplicadoConfirmado(false); }} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${duplicado ? T.rust : T.line}`, fontSize: 16.5, background: "#fff" }} /></div>
           </div>
+          {duplicado && !editandoId && (
+            <div style={{ background: "#E7C9B7", border: `1.5px solid ${T.rust}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: T.rust, display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={16} /> Este animal ya está cargado
+              </div>
+              <div style={{ fontSize: 13.5, color: T.rust, marginTop: 2 }}>
+                RP {duplicado.rp || "s/n"}{duplicado.electronica ? ` · ${duplicado.electronica}` : ""} · {duplicado.resultado}{duplicado.motivo ? ` (${duplicado.motivo})` : ""}{duplicado.gdr ? ` · GDR ${duplicado.gdr}` : ""}
+              </div>
+              <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
+                <button onClick={() => editar(duplicado)} style={{ background: "none", border: "none", color: T.rust, fontWeight: 700, fontSize: 14, cursor: "pointer", textDecoration: "underline" }}>Editar ese registro</button>
+                <button onClick={() => setDuplicadoConfirmado(true)} style={{ background: "none", border: "none", color: T.rust, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Es otro animal, cargar igual</button>
+              </div>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 8 }}>
             <div><label style={{ fontSize: 13, color: T.inkSoft }}>Condición corporal</label>
               <select value={cc} onChange={(e) => setCc(e.target.value)} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", padding: "11px 13px", borderRadius: 8, border: `1.5px solid ${T.line}`, fontSize: 16.5, background: "#fff" }}>
@@ -1819,7 +1860,7 @@
                 {RAZAS_TORO.map((r) => <option key={r} value={r}>{r}</option>)}
               </select></div>
           </div>
-          {!pendiente ? (
+          {bloqueadoPorDuplicado ? null : !pendiente ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 8 }}>
               <button onClick={() => setPendiente("apta")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.gold, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Apta</button>
               <button onClick={() => setPendiente("descarte")} style={{ padding: "16px", borderRadius: 10, border: "none", background: T.rust, color: "#fff", fontWeight: 700, fontSize: 17, cursor: "pointer" }}>Descarte</button>
